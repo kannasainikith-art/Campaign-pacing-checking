@@ -15,7 +15,6 @@ import {
   X,
 } from "lucide-react";
 
-
 /* ---------------------------------------------------------------- */
 /* DATA                                                               */
 /* ---------------------------------------------------------------- */
@@ -114,7 +113,6 @@ CAMPAIGNS.forEach((c) => {
     }
   });
 });
-// give each a descending pseudo-timestamp, most "recent" first
 const NOW = Date.now();
 ALERTS.forEach((a, i) => {
   a.timestamp = NOW - i * 11 * 60 * 1000;
@@ -130,7 +128,6 @@ function timeLabel(ts) {
   });
 }
 
-/* Suggestion generator */
 function getSuggestions(campaign, li) {
   if (li.status === "under") {
     const gap = li.expected - li.spent;
@@ -171,10 +168,6 @@ function getSuggestions(campaign, li) {
     },
   ];
 }
-
-/* ---------------------------------------------------------------- */
-/* SMALL PRESENTATIONAL PIECES                                        */
-/* ---------------------------------------------------------------- */
 
 function PulseMark({ size = 32 }) {
   return (
@@ -246,10 +239,6 @@ function PacingBar({ pacing, status }) {
   );
 }
 
-/* ---------------------------------------------------------------- */
-/* NAVIGATION SHELL                                                    */
-/* ---------------------------------------------------------------- */
-
 const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard", Icon: LayoutDashboard },
   { key: "campaigns", label: "Campaigns", Icon: Megaphone },
@@ -294,10 +283,6 @@ function Sidebar({ view, setView, alertCount, actionsCount }) {
     </aside>
   );
 }
-
-/* ---------------------------------------------------------------- */
-/* DASHBOARD                                                           */
-/* ---------------------------------------------------------------- */
 
 function Dashboard({ goToCampaign, setView }) {
   const totalBudget = CAMPAIGNS.reduce((s, c) => s + c.budget, 0);
@@ -354,7 +339,7 @@ function Dashboard({ goToCampaign, setView }) {
                 <Icon size={18} strokeWidth={2.2} />
               </div>
               <div>
-                <div className="cm-eyebrow">{meta.label === "Healthy" ? "Healthy" : meta.label}</div>
+                <div className="cm-eyebrow">{meta.label}</div>
                 <div className="cm-health-count">{campaignStatusCounts[s]}</div>
               </div>
             </div>
@@ -449,10 +434,6 @@ function PageHeader({ title, subtitle, right, back }) {
     </div>
   );
 }
-
-/* ---------------------------------------------------------------- */
-/* CAMPAIGNS LIST                                                     */
-/* ---------------------------------------------------------------- */
 
 function CampaignsList({ goToCampaign }) {
   const [query, setQuery] = useState("");
@@ -557,10 +538,6 @@ function CampaignsList({ goToCampaign }) {
     </div>
   );
 }
-
-/* ---------------------------------------------------------------- */
-/* CAMPAIGN DETAIL                                                     */
-/* ---------------------------------------------------------------- */
 
 function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, approvedMap }) {
   const rowRefs = useRef({});
@@ -669,10 +646,6 @@ function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, app
   );
 }
 
-/* ---------------------------------------------------------------- */
-/* ALERTS                                                              */
-/* ---------------------------------------------------------------- */
-
 function AlertsPage({ goToLineItem }) {
   const under = ALERTS.filter((a) => a.status === "under").length;
   const over = ALERTS.filter((a) => a.status === "over").length;
@@ -716,10 +689,6 @@ function AlertsPage({ goToLineItem }) {
     </div>
   );
 }
-
-/* ---------------------------------------------------------------- */
-/* ACTIONS TAKEN                                                       */
-/* ---------------------------------------------------------------- */
 
 function ActionsTakenPage({ actions }) {
   return (
@@ -768,10 +737,6 @@ function ActionsTakenPage({ actions }) {
     </div>
   );
 }
-
-/* ---------------------------------------------------------------- */
-/* TAKE ACTION MODAL                                                   */
-/* ---------------------------------------------------------------- */
 
 function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
   const suggestions = useMemo(() => getSuggestions(campaign, lineItem), [campaign, lineItem]);
@@ -836,10 +801,6 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
   );
 }
 
-/* ---------------------------------------------------------------- */
-/* ROOT APP                                                            */
-/* ---------------------------------------------------------------- */
-
 export default function App() {
   useEffect(() => {
     const link1 = document.createElement("link");
@@ -853,7 +814,7 @@ export default function App() {
   const [view, setViewRaw] = useState("dashboard");
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
   const [highlightLineItemId, setHighlightLineItemId] = useState(null);
-  const [modalCtx, setModalCtx] = useState(null); // { campaign, lineItem }
+  const [modalCtx, setModalCtx] = useState(null);
   const [actions, setActions] = useState([]);
   const [approvedMap, setApprovedMap] = useState({});
   const [toast, setToast] = useState(null);
@@ -939,11 +900,6 @@ export default function App() {
     </div>
   );
 }
-
-/* ---------------------------------------------------------------- */
-/* CSS                                                                 */
-/* ---------------------------------------------------------------- */
-
 const CSS = `
 .cm-root {
   --bg: #F5F6F8;
@@ -981,7 +937,6 @@ const CSS = `
 .cm-mono { font-family: var(--font-mono) !important; }
 .cm-ink-3 { color: var(--ink-3); }
 
-/* Sidebar */
 .cm-sidebar {
   width: 240px;
   min-width: 240px;
@@ -1016,10 +971,8 @@ const CSS = `
 .cm-signed-in { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; margin-top:10px;}
 .cm-signed-email { font-size: 12.5px; color: var(--ink-2); font-family: var(--font-mono); margin-top: 2px; }
 
-/* Main */
 .cm-main { flex: 1; padding: 32px 40px 60px; max-width: 1180px; }
 
-/* Page header */
 .cm-page-header { margin-bottom: 24px; }
 .cm-page-header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .cm-page-title { font-family: var(--font-display); font-size: 30px; font-weight: 700; letter-spacing: -0.015em; margin: 0 0 6px; }
@@ -1041,7 +994,6 @@ const CSS = `
 .cm-live-ping { position: absolute; inset: -4px; border-radius: 50%; background: var(--healthy); opacity: .35; animation: cmPing 1.8s cubic-bezier(0,0,0.2,1) infinite; }
 @keyframes cmPing { 0% { transform: scale(0.6); opacity: .5; } 100% { transform: scale(2.2); opacity: 0; } }
 
-/* Stat cards */
 .cm-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; }
 .cm-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px; }
 .cm-stat-grid-4 { grid-template-columns: repeat(4, 1fr); }
@@ -1051,7 +1003,6 @@ const CSS = `
 .cm-stat-value { font-family: var(--font-display); font-size: 28px; font-weight: 700; letter-spacing: -0.01em; margin-top: 2px; }
 .cm-stat-sub { font-size: 12.5px; color: var(--ink-3); font-family: var(--font-mono); }
 
-/* Health cards */
 .cm-section-label { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin: 4px 0 12px; }
 .cm-section-label-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 30px; }
 .cm-health-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 28px; }
@@ -1059,7 +1010,6 @@ const CSS = `
 .cm-health-icon { width: 38px; height: 38px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .cm-health-count { font-family: var(--font-display); font-size: 24px; font-weight: 700; }
 
-/* Two column layout */
 .cm-two-col { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; align-items: start; }
 .cm-card-title { font-family: var(--font-display); font-weight: 600; font-size: 16px; }
 .cm-card-sub { color: var(--ink-3); font-size: 12.5px; margin-top: 2px; }
@@ -1074,11 +1024,9 @@ const CSS = `
   color: var(--accent); font-size: 13px; font-weight: 600; padding: 0; margin-top: 18px;
 }
 
-/* Pacing bar */
 .cm-pacingbar-track { width: 100%; height: 5px; border-radius: 999px; background: var(--border); margin-top: 6px; overflow: hidden; }
 .cm-pacingbar-fill { height: 100%; border-radius: 999px; transition: width .3s ease; }
 
-/* Toolbar (search + filter) */
 .cm-toolbar { display: flex; gap: 12px; margin-bottom: 18px; }
 .cm-search {
   flex: 1; display: flex; align-items: center; gap: 8px; background: var(--surface);
@@ -1098,7 +1046,6 @@ const CSS = `
 .cm-select-option { display: block; width: 100%; text-align: left; padding: 9px 14px; background: none; border: none; font-size: 13px; color: var(--ink-2); }
 .cm-select-option:hover { background: var(--surface-2); color: var(--ink); }
 
-/* Table */
 .cm-table-card { padding: 0; overflow: hidden; }
 .cm-table-head, .cm-table-row { display: grid; align-items: center; padding: 14px 20px; }
 .cm-table-head {
@@ -1119,14 +1066,12 @@ button.cm-table-row:hover { background: var(--surface-2); }
 .cm-row-sub { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
 .cm-empty { padding: 32px 20px; text-align: center; color: var(--ink-3); font-size: 13.5px; }
 
-/* Badges */
 .cm-badge {
   display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600;
   padding: 4px 9px; border-radius: 999px; border: 1px solid; white-space: nowrap;
 }
 .cm-badge-sm { font-size: 11.5px; padding: 3px 8px; }
 
-/* Take action */
 .cm-action-cell { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .cm-take-action-btn {
   display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #fff;
@@ -1136,7 +1081,6 @@ button.cm-table-row:hover { background: var(--surface-2); }
 .cm-take-action-btn:hover { background: #0C7273; }
 .cm-approved-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--healthy); font-weight: 600; }
 
-/* Alerts */
 .cm-alert-card { padding: 0; overflow: hidden; }
 .cm-alert-row {
   display: flex; align-items: flex-start; gap: 14px; width: 100%; text-align: left;
@@ -1151,7 +1095,6 @@ button.cm-table-row:hover { background: var(--surface-2); }
 .cm-alert-campaign { font-size: 12px; color: var(--ink-3); margin-top: 4px; }
 .cm-alert-campaign span { color: var(--ink-2); font-weight: 500; }
 
-/* Actions taken */
 .cm-actions-list { display: flex; flex-direction: column; gap: 12px; }
 .cm-action-item { display: flex; gap: 14px; align-items: flex-start; }
 .cm-action-icon { width: 34px; height: 34px; border-radius: 9px; background: var(--healthy-soft); color: var(--healthy); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -1165,7 +1108,6 @@ button.cm-table-row:hover { background: var(--surface-2); }
 .cm-empty-title { font-weight: 700; font-family: var(--font-display); font-size: 15px; }
 .cm-empty-sub { color: var(--ink-3); font-size: 13px; max-width: 360px; }
 
-/* Modal */
 .cm-modal-overlay {
   position: fixed; inset: 0; background: rgba(15,20,26,0.4); backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center; z-index: 100; padding: 24px;
@@ -1201,7 +1143,6 @@ button.cm-table-row:hover { background: var(--surface-2); }
 .cm-btn-primary { display: flex; align-items: center; gap: 6px; background: var(--accent); color: #fff; border: none; padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 700; }
 .cm-btn-primary:hover { background: #0C7273; }
 
-/* Toast */
 .cm-toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: var(--ink); color: #fff; padding: 12px 18px; border-radius: 10px;
@@ -1217,6 +1158,7 @@ button.cm-table-row:hover { background: var(--surface-2); }
 .cm-simplechart-bar { width: 100%; border-radius: 4px 4px 0 0; transition: height .3s ease; }
 .cm-simplechart-value { font-size: 12px; font-weight: 700; margin-top: 8px; }
 .cm-simplechart-label { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; text-align: center; line-height: 1.3; }
+
 @media (max-width: 900px) {
   .cm-two-col { grid-template-columns: 1fr; }
   .cm-stat-grid, .cm-stat-grid-4, .cm-stat-grid-3, .cm-health-grid { grid-template-columns: repeat(2, 1fr); }
