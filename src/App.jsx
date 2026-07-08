@@ -16,114 +16,42 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-/* ---------------------------------------------------------------- */
-/* LIVE DATA SOURCE (Google Sheet published as CSV)                   */
-/* ---------------------------------------------------------------- */
-
-const SHEET_CSV_URL =
-  "https://docs.google.com/spreadsheets/d/e/2PACX-1vRndQ8rvmQ4KiEDIWZjHxI41ANysYDG7_1WfQRje4w31KbRSjemWwbFHqF6_Fu9htpEqYLyoVEvrSMr/pub?output=csv";
+const SUPABASE_URL = "https://mfgguyfubnmjhtqnbsjt.supabase.co";
+const SUPABASE_KEY = "sb_publishable_I3GcHbLfAHjMEuwrjaEABQ_Wl43XwCr";
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-
-function parseCSV(text) {
-  const rows = [];
-  let row = [];
-  let field = "";
-  let inQuotes = false;
-  const s = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (s[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        field += ch;
-      }
-    } else {
-      if (ch === '"') {
-        inQuotes = true;
-      } else if (ch === ",") {
-        row.push(field);
-        field = "";
-      } else if (ch === "\n") {
-        row.push(field);
-        rows.push(row);
-        row = [];
-        field = "";
-      } else {
-        field += ch;
-      }
-    }
-  }
-  if (field.length > 0 || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-  const cleanRows = rows.filter((r) => r.some((c) => c.trim().length > 0));
-  if (cleanRows.length === 0) return [];
-  const headers = cleanRows[0].map((h) => h.trim());
-  return cleanRows.slice(1).map((cells) => {
-    const obj = {};
-    headers.forEach((h, i) => (obj[h] = (cells[i] ?? "").trim()));
-    return obj;
-  });
-}
-
-function toNumber(v) {
-  if (!v) return 0;
-  const cleaned = String(v).replace(/[^0-9.\-]/g, "");
-  const n = parseFloat(cleaned);
-  return isNaN(n) ? 0 : n;
-}
 
 function rowsToRawCampaigns(rows) {
   const byCampaign = {};
   const order = [];
-  const liCounter = {};
 
   rows.forEach((r) => {
-    const orderText = (r["Order"] || "").trim();
-    if (!orderText || orderText.toLowerCase() === "total") return;
-
-    const campaignName = (r["Campaign Name"] || "").trim() || orderText;
-    const campaignId = campaignName;
-    const advertiser = (r["Advertiser"] || "").trim() || "—";
+    const campaignId = r.campaign_name;
+    if (!campaignId) return;
 
     if (!byCampaign[campaignId]) {
       byCampaign[campaignId] = {
         id: campaignId,
-        name: campaignName,
-        advertiser,
+        name: r.campaign_name,
+        advertiser: r.advertiser || "—",
         objective: "",
         lineItems: [],
       };
       order.push(campaignId);
-      liCounter[campaignId] = 0;
     }
 
-    liCounter[campaignId] += 1;
-    const liId = `LI-${String(liCounter[campaignId]).padStart(2, "0")}`;
-    const lineItemName = (r["Line item"] || "").trim() || liId;
-    const booked = toNumber(r["Line item booked revenue (exclude CPD)"]);
-    const revenue = toNumber(r["Revenue ($)"]);
-    const imp = toNumber(r["Ad server impressions"]);
-    const clicks = toNumber(r["Ad server clicks"]);
-
     byCampaign[campaignId].lineItems.push({
-      id: liId,
-      name: lineItemName,
+      id: r.li_id,
+      name: r.li_name,
       audience: "",
       platform: "Google Ad Manager",
-      budget: booked,
-      expected: booked,
-      spent: revenue,
-      imp,
-      clicks,
+      budget: Number(r.budget) || 0,
+      expected: Number(r.expected_impressions) || 0,
+      spent: Number(r.spent) || 0,
+      imp: Number(r.impressions) || 0,
+      clicks: Number(r.clicks) || 0,
+      pacing: r.pacing != null ? Number(r.pacing) : null,
+      status: r.status || "healthy",
     });
   });
 
@@ -141,10 +69,10 @@ function statusOf(pacing) {
 
 function computeCampaigns(rawCampaigns) {
   return rawCampaigns.map((c) => {
-    const lineItems = c.lineItems.map((li) => {
-      const pacing = pacingOf(li.spent, li.expected);
-      return { ...li, pacing, status: statusOf(pacing) };
-    });
+    const lineItems = c.lineItems.map((li) => ({
+      ...li,
+      status: li.status || statusOf(li.pacing || 0),
+    }));
     const budget = lineItems.reduce((s, li) => s + li.budget, 0);
     const spent = lineItems.reduce((s, li) => s + li.spent, 0);
     const expected = lineItems.reduce((s, li) => s + li.expected, 0);
@@ -239,6 +167,21 @@ function getSuggestions(campaign, li) {
       impact: "Reset pacing to on-target range immediately upon resume",
     },
   ];
+}
+
+function buildSimulatedGamPayload(campaign, li, suggestion) {
+  return {
+    action: "simulated_gam_update",
+    network: "GAM (simulated — no live account connected)",
+    lineItemId: li.id,
+    lineItemName: li.name,
+    campaign: campaign.name,
+    changeRequested: suggestion.title,
+    reasoning: suggestion.description,
+    currentPacing: `${li.pacing}%`,
+    expectedImpact: suggestion.impact,
+    timestamp: new Date().toISOString(),
+  };
 }
 
 function PulseMark({ size = 32 }) {
@@ -479,7 +422,6 @@ function Dashboard({ campaigns, alerts, setView, onRefresh, refreshing }) {
     </div>
   );
 }
-
 function StatCard({ label, value, sub, valueColor }) {
   return (
     <div className="cm-card cm-stat-card">
@@ -912,12 +854,13 @@ export default function App() {
   const fetchData = useCallback(async (isManualRefresh) => {
     if (isManualRefresh) setRefreshing(true);
     try {
-      const res = await fetch(`${SHEET_CSV_URL}&t=${Date.now()}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Sheet request failed (status ${res.status})`);
-      const text = await res.text();
-      const rows = parseCSV(text);
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/campaign_pacing?select=*`, {
+        headers: { apikey: SUPABASE_KEY },
+      });
+      if (!res.ok) throw new Error(`Database request failed (status ${res.status})`);
+      const rows = await res.json();
       const raw = rowsToRawCampaigns(rows);
-      if (raw.length === 0) throw new Error("The sheet returned no campaign rows.");
+      if (raw.length === 0) throw new Error("No campaign rows found in the database.");
       setCampaigns(computeCampaigns(raw));
       setError(null);
     } catch (e) {
@@ -957,8 +900,12 @@ export default function App() {
     setModalCtx({ campaign, lineItem });
   }
 
-  function approveAction(suggestion) {
+  async function approveAction(suggestion) {
     const { campaign, lineItem } = modalCtx;
+    const gamPayload = buildSimulatedGamPayload(campaign, lineItem, suggestion);
+
+    console.log("Simulated GAM API call →", gamPayload);
+
     const record = {
       id: `${Date.now()}`,
       title: suggestion.title,
@@ -973,8 +920,30 @@ export default function App() {
     setActions((prev) => [record, ...prev]);
     setApprovedMap((prev) => ({ ...prev, [`${campaign.id}-${lineItem.id}`]: true }));
     setModalCtx(null);
-    setToast("Action approved and saved to your audit trail.");
+    setToast("Action approved — simulated GAM update logged.");
     setTimeout(() => setToast(null), 3200);
+
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/actions_taken`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          campaign_name: campaign.name,
+          li_id: lineItem.id,
+          li_name: lineItem.name,
+          title: suggestion.title,
+          description: suggestion.description,
+          impact: suggestion.impact,
+          li_status: lineItem.status,
+          simulated_gam_payload: gamPayload,
+        }),
+      });
+    } catch (e) {
+      console.error("Failed to persist action to Supabase:", e);
+    }
   }
 
   const selectedCampaign = campaigns.find((c) => c.id === selectedCampaignId);
