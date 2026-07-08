@@ -386,7 +386,6 @@ function Dashboard({ goToCampaign, setView }) {
             })}
           </div>
         </div>
-        </div>
 
         <div className="cm-card">
           <div className="cm-card-title">Line Item Health</div>
