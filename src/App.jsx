@@ -376,9 +376,8 @@ function Dashboard({ goToCampaign, setView }) {
         <div className="cm-card cm-chart-card">
           <div className="cm-card-title">Campaign Pacing (%)</div>
           <div className="cm-card-sub">100% = on-pace · reference band 90–110%</div>
-          <div style={{ width: "100%", height: 260, marginTop: 16 }}>
-            <ResponsiveContainer minWidth={300} minHeight={220}>
-              <BarChart data={chartData} margin={{ top: 8, right: 8, left: -12, bottom: 8 }}>
+          <div style={{ width: "100%", height: 260, marginTop: 16, overflowX: "auto" }}>
+            <BarChart width={520} height={260} data={chartData} margin={{ top: 8, right: 8, left: -12, bottom: 8 }}>
                 <CartesianGrid stroke="var(--border)" vertical={false} />
                 <XAxis
                   dataKey="name"
@@ -409,7 +408,6 @@ function Dashboard({ goToCampaign, setView }) {
                   ))}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>
           </div>
         </div>
 
