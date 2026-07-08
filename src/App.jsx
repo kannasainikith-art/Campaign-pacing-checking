@@ -23,49 +23,110 @@ import {
 const SHEET_CSV_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vRndQ8rvmQ4KiEDIWZjHxI41ANysYDG7_1WfQRje4w31KbRSjemWwbFHqF6_Fu9htpEqYLyoVEvrSMr/pub?output=csv";
 
-const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // re-check the sheet every 5 minutes
+const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 function parseCSV(text) {
-  const lines = text.trim().split("\n").map((l) => l.replace(/\r$/, ""));
-  const headers = lines[0].split(",").map((h) => h.trim());
-  return lines
-    .slice(1)
-    .filter((l) => l.trim().length > 0)
-    .map((line) => {
-      const cells = line.split(",").map((c) => c.trim());
-      const row = {};
-      headers.forEach((h, i) => (row[h] = cells[i] ?? ""));
-      return row;
-    });
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  const s = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (s[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ",") {
+        row.push(field);
+        field = "";
+      } else if (ch === "\n") {
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+      } else {
+        field += ch;
+      }
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  const cleanRows = rows.filter((r) => r.some((c) => c.trim().length > 0));
+  if (cleanRows.length === 0) return [];
+  const headers = cleanRows[0].map((h) => h.trim());
+  return cleanRows.slice(1).map((cells) => {
+    const obj = {};
+    headers.forEach((h, i) => (obj[h] = (cells[i] ?? "").trim()));
+    return obj;
+  });
+}
+
+function toNumber(v) {
+  if (!v) return 0;
+  const cleaned = String(v).replace(/[^0-9.\-]/g, "");
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : n;
 }
 
 function rowsToRawCampaigns(rows) {
   const byCampaign = {};
   const order = [];
+  const liCounter = {};
+
   rows.forEach((r) => {
-    if (!r.campaign_id) return;
-    if (!byCampaign[r.campaign_id]) {
-      byCampaign[r.campaign_id] = {
-        id: r.campaign_id,
-        name: r.campaign_name,
-        advertiser: r.advertiser,
-        objective: r.objective,
+    const orderText = (r["Order"] || "").trim();
+    if (!orderText || orderText.toLowerCase() === "total") return;
+
+    const campaignName = (r["Campaign Name"] || "").trim() || orderText;
+    const campaignId = campaignName;
+    const advertiser = (r["Advertiser"] || "").trim() || "—";
+
+    if (!byCampaign[campaignId]) {
+      byCampaign[campaignId] = {
+        id: campaignId,
+        name: campaignName,
+        advertiser,
+        objective: "",
         lineItems: [],
       };
-      order.push(r.campaign_id);
+      order.push(campaignId);
+      liCounter[campaignId] = 0;
     }
-    byCampaign[r.campaign_id].lineItems.push({
-      id: r.li_id,
-      name: r.li_name,
-      audience: r.li_audience,
-      platform: r.li_platform,
-      budget: Number(r.budget) || 0,
-      expected: Number(r.expected) || 0,
-      spent: Number(r.spent) || 0,
-      imp: Number(r.imp) || 0,
-      clicks: Number(r.clicks) || 0,
+
+    liCounter[campaignId] += 1;
+    const liId = `LI-${String(liCounter[campaignId]).padStart(2, "0")}`;
+    const lineItemName = (r["Line item"] || "").trim() || liId;
+    const booked = toNumber(r["Line item booked revenue (exclude CPD)"]);
+    const revenue = toNumber(r["Revenue ($)"]);
+    const imp = toNumber(r["Ad server impressions"]);
+    const clicks = toNumber(r["Ad server clicks"]);
+
+    byCampaign[campaignId].lineItems.push({
+      id: liId,
+      name: lineItemName,
+      audience: "",
+      platform: "Google Ad Manager",
+      budget: booked,
+      expected: booked,
+      spent: revenue,
+      imp,
+      clicks,
     });
   });
+
   return order.map((id) => byCampaign[id]);
 }
 
@@ -102,7 +163,7 @@ function computeAlerts(campaigns) {
           campaignId: c.id,
           campaignName: c.name,
           lineItemId: li.id,
-          lineItemLabel: `${li.id} · ${li.name} · ${li.audience}`,
+          lineItemLabel: `${li.id} · ${li.name}${li.audience ? ` · ${li.audience}` : ""}`,
           status: li.status,
           pacing: li.pacing,
         });
@@ -416,7 +477,7 @@ function Dashboard({ campaigns, alerts, setView, onRefresh, refreshing }) {
         </div>
       </div>
     </div>
-    );
+  );
 }
 
 function StatCard({ label, value, sub, valueColor }) {
@@ -526,7 +587,7 @@ function CampaignsList({ campaigns, goToCampaign }) {
             </span>
             <span>
               <div className="cm-row-title">{c.advertiser}</div>
-              <div className="cm-row-sub">{c.objective}</div>
+              <div className="cm-row-sub">{c.objective || "\u00A0"}</div>
             </span>
             <span>
               <div className="cm-row-title cm-mono">{fmtMoney(c.budget)}</div>
@@ -570,7 +631,7 @@ function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, app
           <div>
             <h1 className="cm-page-title">{campaign.name}</h1>
             <p className="cm-page-subtitle">
-              {campaign.advertiser} · {campaign.objective}
+              {campaign.advertiser}{campaign.objective ? ` · ${campaign.objective}` : ""}
             </p>
           </div>
           <StatusBadge status={campaign.status} />
@@ -614,7 +675,7 @@ function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, app
             >
               <span>
                 <div className="cm-row-title">
-                  {li.id} · {li.name} · {li.audience}
+                  {li.id} · {li.name}{li.audience ? ` · ${li.audience}` : ""}
                 </div>
                 <div className="cm-row-sub">
                   {li.platform} · Budget {fmtMoney(li.budget)}
@@ -764,7 +825,7 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
               <Sparkles size={13} /> Suggested actions
             </div>
             <div className="cm-modal-title">
-              {lineItem.id} · {lineItem.name} · {lineItem.audience}
+              {lineItem.id} · {lineItem.name}{lineItem.audience ? ` · ${lineItem.audience}` : ""}
             </div>
             <div className="cm-modal-sub">
               {campaign.name} · currently at{" "}
