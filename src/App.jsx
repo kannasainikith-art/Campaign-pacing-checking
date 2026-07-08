@@ -46,9 +46,9 @@ function rowsToRawCampaigns(rows) {
       audience: "",
       platform: "Google Ad Manager",
       budget: Number(r.budget) || 0,
-      expected: Number(r.expected_impressions) || 0,
       spent: Number(r.spent) || 0,
       imp: Number(r.impressions) || 0,
+      expectedImp: Number(r.expected_impressions) || 0,
       clicks: Number(r.clicks) || 0,
       pacing: r.pacing != null ? Number(r.pacing) : null,
       status: r.status || "healthy",
@@ -75,9 +75,10 @@ function computeCampaigns(rawCampaigns) {
     }));
     const budget = lineItems.reduce((s, li) => s + li.budget, 0);
     const spent = lineItems.reduce((s, li) => s + li.spent, 0);
-    const expected = lineItems.reduce((s, li) => s + li.expected, 0);
-    const pacing = pacingOf(spent, expected);
-    return { ...c, lineItems, budget, spent, expected, pacing, status: statusOf(pacing) };
+    const imp = lineItems.reduce((s, li) => s + li.imp, 0);
+    const expectedImp = lineItems.reduce((s, li) => s + li.expectedImp, 0);
+    const pacing = pacingOf(imp, expectedImp);
+    return { ...c, lineItems, budget, spent, imp, expectedImp, pacing, status: statusOf(pacing) };
   });
 }
 
@@ -130,11 +131,11 @@ function timeLabel(ts) {
 
 function getSuggestions(campaign, li) {
   if (li.status === "under") {
-    const gap = li.expected - li.spent;
+    const gap = li.expectedImp - li.imp;
     return [
       {
         title: "Increase daily budget cap by 40%",
-        description: `Raise the daily budget limit to accelerate delivery and compensate for the ${fmtMoney(gap)} underspend. This allows ${li.platform}'s algorithm to serve ads more aggressively to the target audience.`,
+        description: `Raise the daily budget limit to accelerate delivery and close the ${fmtNum(gap)}-impression delivery gap. This allows ${li.platform}'s algorithm to serve ads more aggressively to the target audience.`,
         impact: "Close pacing gap to 85–90% within 5–7 days",
       },
       {
@@ -149,11 +150,11 @@ function getSuggestions(campaign, li) {
       },
     ];
   }
-  const excess = li.spent - li.expected;
+  const excess = li.imp - li.expectedImp;
   return [
     {
       title: "Reduce daily budget cap by 25%",
-      description: `Lower the daily budget limit to slow delivery velocity and avoid exhausting the ${fmtMoney(li.budget)} budget before the flight ends. Current overspend is ${fmtMoney(excess)} against expected pace.`,
+      description: `Lower the daily budget limit to slow delivery velocity and avoid exhausting the ${fmtMoney(li.budget)} budget before the flight ends. Current overdelivery is ${fmtNum(excess)} impressions ahead of expected pace.`,
       impact: "Bring pacing back to 95–105% within 2–3 days",
     },
     {
@@ -303,8 +304,9 @@ function Sidebar({ view, setView, alertCount, actionsCount }) {
 function Dashboard({ campaigns, alerts, setView, onRefresh, refreshing }) {
   const totalBudget = campaigns.reduce((s, c) => s + c.budget, 0);
   const totalSpent = campaigns.reduce((s, c) => s + c.spent, 0);
-  const totalExpected = campaigns.reduce((s, c) => s + c.expected, 0);
-  const overallPacing = pacingOf(totalSpent, totalExpected);
+  const totalImp = campaigns.reduce((s, c) => s + c.imp, 0);
+  const totalExpectedImp = campaigns.reduce((s, c) => s + c.expectedImp, 0);
+  const overallPacing = pacingOf(totalImp, totalExpectedImp);
   const campaignStatusCounts = { healthy: 0, under: 0, over: 0 };
   campaigns.forEach((c) => campaignStatusCounts[c.status]++);
 
@@ -420,8 +422,9 @@ function Dashboard({ campaigns, alerts, setView, onRefresh, refreshing }) {
         </div>
       </div>
     </div>
-  );
+    );
 }
+
 function StatCard({ label, value, sub, valueColor }) {
   return (
     <div className="cm-card cm-stat-card">
@@ -539,7 +542,7 @@ function CampaignsList({ campaigns, goToCampaign }) {
               <div className="cm-row-title cm-mono">
                 {c.pacing}%{" "}
                 <span className="cm-row-sub" style={{ fontWeight: 400 }}>
-                  exp {fmtMoney(c.expected)}
+                  exp {fmtNum(c.expectedImp)} imp
                 </span>
               </div>
               <PacingBar pacing={c.pacing} status={c.status} />
@@ -583,7 +586,7 @@ function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, app
 
       <div className="cm-stat-grid cm-stat-grid-4">
         <StatCard label="Budget" value={fmtMoney(campaign.budget)} sub=" " />
-        <StatCard label="Spent" value={fmtMoney(campaign.spent)} sub={`Expected ${fmtMoney(campaign.expected)}`} />
+        <StatCard label="Spent" value={fmtMoney(campaign.spent)} sub={`Expected ${fmtNum(campaign.expectedImp)} imp`} />
         <StatCard
           label="Pacing"
           value={`${campaign.pacing}%`}
@@ -630,7 +633,7 @@ function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, app
               <span>
                 <div className="cm-row-title cm-mono">{li.pacing}%</div>
                 <div className="cm-row-sub cm-mono">
-                  {fmtMoney(li.spent)} / {fmtMoney(li.expected)}
+                  {fmtNum(li.imp)} / {fmtNum(li.expectedImp)} imp
                 </div>
                 <PacingBar pacing={li.pacing} status={li.status} />
               </span>
@@ -850,7 +853,6 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
-
   const fetchData = useCallback(async (isManualRefresh) => {
     if (isManualRefresh) setRefreshing(true);
     try {
