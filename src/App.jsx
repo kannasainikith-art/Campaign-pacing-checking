@@ -14,17 +14,7 @@ import {
   Activity,
   X,
 } from "lucide-react";
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  ReferenceLine,
-  Tooltip,
-  Cell,
-} from "recharts";
+
 
 /* ---------------------------------------------------------------- */
 /* DATA                                                               */
@@ -376,39 +366,26 @@ function Dashboard({ goToCampaign, setView }) {
         <div className="cm-card cm-chart-card">
           <div className="cm-card-title">Campaign Pacing (%)</div>
           <div className="cm-card-sub">100% = on-pace · reference band 90–110%</div>
-          <div style={{ width: "100%", height: 260, marginTop: 16, overflowX: "auto" }}>
-            <BarChart width={520} height={260} data={chartData} margin={{ top: 8, right: 8, left: -12, bottom: 8 }}>
-                <CartesianGrid stroke="var(--border)" vertical={false} />
-                <XAxis
-                  dataKey="name"
-                  tick={{ fontSize: 11, fill: "var(--ink-3)", fontFamily: "var(--font-mono)" }}
-                  axisLine={{ stroke: "var(--border-strong)" }}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 11, fill: "var(--ink-3)", fontFamily: "var(--font-mono)" }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <ReferenceLine y={90} stroke="var(--border-strong)" strokeDasharray="4 4" />
-                <ReferenceLine y={110} stroke="var(--border-strong)" strokeDasharray="4 4" />
-                <Tooltip
-                  cursor={{ fill: "var(--surface-2)" }}
-                  contentStyle={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 12,
-                    border: "1px solid var(--border)",
-                    borderRadius: 8,
-                  }}
-                  formatter={(v) => [`${v}%`, "Pacing"]}
-                />
-                <Bar dataKey="pacing" radius={[4, 4, 0, 0]} maxBarSize={46}>
-                  {chartData.map((d, i) => (
-                    <Cell key={i} fill={STATUS_META[d.status].color} />
-                  ))}
-                </Bar>
-              </BarChart>
+          <div className="cm-simplechart">
+            {chartData.map((d, i) => {
+              const height = Math.max(4, Math.min(100, (d.pacing / 150) * 100));
+              return (
+                <div className="cm-simplechart-col" key={i}>
+                  <div className="cm-simplechart-bar-track">
+                    <div className="cm-simplechart-band" />
+                    <div
+                      className="cm-simplechart-bar"
+                      style={{ height: `${height}%`, background: STATUS_META[d.status].color }}
+                      title={`${d.name}: ${d.pacing}%`}
+                    />
+                  </div>
+                  <div className="cm-simplechart-value cm-mono">{d.pacing}%</div>
+                  <div className="cm-simplechart-label">{d.name}</div>
+                </div>
+              );
+            })}
           </div>
+        </div>
         </div>
 
         <div className="cm-card">
@@ -1234,6 +1211,13 @@ button.cm-table-row:hover { background: var(--surface-2); }
 }
 @keyframes cmToastIn { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
+.cm-simplechart { display: flex; align-items: flex-end; gap: 16px; height: 260px; margin-top: 20px; padding: 0 4px; }
+.cm-simplechart-col { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; }
+.cm-simplechart-bar-track { position: relative; width: 100%; max-width: 56px; height: 190px; display: flex; align-items: flex-end; background: var(--surface-2); border-radius: 6px 6px 0 0; overflow: hidden; }
+.cm-simplechart-band { position: absolute; left: 0; right: 0; top: 26.7%; bottom: 26.7%; border-top: 1px dashed var(--border-strong); border-bottom: 1px dashed var(--border-strong); }
+.cm-simplechart-bar { width: 100%; border-radius: 4px 4px 0 0; transition: height .3s ease; }
+.cm-simplechart-value { font-size: 12px; font-weight: 700; margin-top: 8px; }
+.cm-simplechart-label { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; text-align: center; line-height: 1.3; }
 @media (max-width: 900px) {
   .cm-two-col { grid-template-columns: 1fr; }
   .cm-stat-grid, .cm-stat-grid-4, .cm-stat-grid-3, .cm-health-grid { grid-template-columns: repeat(2, 1fr); }
