@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   LayoutDashboard,
   Megaphone,
@@ -13,53 +13,61 @@ import {
   AlertTriangle,
   Activity,
   X,
+  RefreshCw,
 } from "lucide-react";
 
 /* ---------------------------------------------------------------- */
-/* DATA                                                               */
+/* LIVE DATA SOURCE (Google Sheet published as CSV)                   */
 /* ---------------------------------------------------------------- */
 
-const RAW_CAMPAIGNS = [
-  {
-    id: "summersale",
-    name: "Summer Sale - Display Campaign",
-    advertiser: "Acme Retail",
-    objective: "Conversions",
-    lineItems: [
-      { id: "LI-01", name: "Homepage Takeover", audience: "Desktop", platform: "Google Ad Manager", budget: 12000, expected: 12000, spent: 11760, imp: 1470000, clicks: 1176 },
-      { id: "LI-02", name: "Homepage Takeover", audience: "Mobile", platform: "Google Ad Manager", budget: 13000, expected: 13000, spent: 13390, imp: 2060000, clicks: 2266 },
-      { id: "LI-03", name: "Category Page Retargeting", audience: "All Users", platform: "Google Ad Manager", budget: 14400, expected: 14400, spent: 13824, imp: 1152000, clicks: 1728 },
-      { id: "LI-04", name: "Native Content Recommendation", audience: "All Users", platform: "Google Ad Manager", budget: 7200, expected: 7200, spent: 7416, imp: 824000, clicks: 906 },
-    ],
-  },
-  {
-    id: "backtoschool",
-    name: "Back to School - Video Campaign",
-    advertiser: "Acme Retail",
-    objective: "Video Views",
-    lineItems: [
-      { id: "LI-01", name: "Pre-roll Video", audience: "YouTube", platform: "Google Ad Manager", budget: 18000, expected: 18000, spent: 21240, imp: 1180000, clicks: 590 },
-      { id: "LI-02", name: "Pre-roll Video", audience: "Connected TV", platform: "Google Ad Manager", budget: 33000, expected: 33000, spent: 41580, imp: 1890000, clicks: 756 },
-      { id: "LI-03", name: "Mid-roll Video", audience: "Mobile App", platform: "Google Ad Manager", budget: 9000, expected: 9000, spent: 12780, imp: 852000, clicks: 511 },
-      { id: "LI-04", name: "Outstream Video", audience: "Desktop", platform: "Google Ad Manager", budget: 20000, expected: 20000, spent: 23400, imp: 2340000, clicks: 1638 },
-      { id: "LI-05", name: "Bumper Ads", audience: "Social Placement", platform: "Google Ad Manager", budget: 16800, expected: 16800, spent: 21840, imp: 1560000, clicks: 780 },
-    ],
-  },
-  {
-    id: "holidayclearance",
-    name: "Holiday Clearance - Programmatic Campaign",
-    advertiser: "Acme Retail",
-    objective: "Clearance Sales",
-    lineItems: [
-      { id: "LI-01", name: "Programmatic Display", audience: "Prospecting", platform: "Google Ad Manager", budget: 12500, expected: 12500, spent: 9375, imp: 1875000, clicks: 1125 },
-      { id: "LI-02", name: "Programmatic Display", audience: "Retargeting", platform: "Google Ad Manager", budget: 6750, expected: 6750, spent: 2970, imp: 396000, clicks: 356 },
-      { id: "LI-03", name: "Native Ads", audience: "In-feed", platform: "Google Ad Manager", budget: 9600, expected: 9600, spent: 6720, imp: 1120000, clicks: 1008 },
-      { id: "LI-04", name: "Audio Ads", audience: "Streaming", platform: "Google Ad Manager", budget: 12100, expected: 12100, spent: 7502, imp: 682000, clicks: 341 },
-      { id: "LI-05", name: "Rich Media", audience: "Interstitial", platform: "Google Ad Manager", budget: 23400, expected: 23400, spent: 18720, imp: 1440000, clicks: 1440 },
-      { id: "LI-06", name: "Programmatic Display", audience: "Lookalike Audiences", platform: "Google Ad Manager", budget: 4550, expected: 4550, spent: 2275, imp: 350000, clicks: 245 },
-    ],
-  },
-];
+const SHEET_CSV_URL =
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vRndQ8rvmQ4KiEDIWZjHxI41ANysYDG7_1WfQRje4w31KbRSjemWwbFHqF6_Fu9htpEqYLyoVEvrSMr/pub?output=csv";
+
+const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // re-check the sheet every 5 minutes
+
+function parseCSV(text) {
+  const lines = text.trim().split("\n").map((l) => l.replace(/\r$/, ""));
+  const headers = lines[0].split(",").map((h) => h.trim());
+  return lines
+    .slice(1)
+    .filter((l) => l.trim().length > 0)
+    .map((line) => {
+      const cells = line.split(",").map((c) => c.trim());
+      const row = {};
+      headers.forEach((h, i) => (row[h] = cells[i] ?? ""));
+      return row;
+    });
+}
+
+function rowsToRawCampaigns(rows) {
+  const byCampaign = {};
+  const order = [];
+  rows.forEach((r) => {
+    if (!r.campaign_id) return;
+    if (!byCampaign[r.campaign_id]) {
+      byCampaign[r.campaign_id] = {
+        id: r.campaign_id,
+        name: r.campaign_name,
+        advertiser: r.advertiser,
+        objective: r.objective,
+        lineItems: [],
+      };
+      order.push(r.campaign_id);
+    }
+    byCampaign[r.campaign_id].lineItems.push({
+      id: r.li_id,
+      name: r.li_name,
+      audience: r.li_audience,
+      platform: r.li_platform,
+      budget: Number(r.budget) || 0,
+      expected: Number(r.expected) || 0,
+      spent: Number(r.spent) || 0,
+      imp: Number(r.imp) || 0,
+      clicks: Number(r.clicks) || 0,
+    });
+  });
+  return order.map((id) => byCampaign[id]);
+}
 
 function pacingOf(spent, expected) {
   return expected > 0 ? Math.round((spent / expected) * 1000) / 10 : 0;
@@ -70,17 +78,43 @@ function statusOf(pacing) {
   return "healthy";
 }
 
-const CAMPAIGNS = RAW_CAMPAIGNS.map((c) => {
-  const lineItems = c.lineItems.map((li) => {
-    const pacing = pacingOf(li.spent, li.expected);
-    return { ...li, pacing, status: statusOf(pacing) };
+function computeCampaigns(rawCampaigns) {
+  return rawCampaigns.map((c) => {
+    const lineItems = c.lineItems.map((li) => {
+      const pacing = pacingOf(li.spent, li.expected);
+      return { ...li, pacing, status: statusOf(pacing) };
+    });
+    const budget = lineItems.reduce((s, li) => s + li.budget, 0);
+    const spent = lineItems.reduce((s, li) => s + li.spent, 0);
+    const expected = lineItems.reduce((s, li) => s + li.expected, 0);
+    const pacing = pacingOf(spent, expected);
+    return { ...c, lineItems, budget, spent, expected, pacing, status: statusOf(pacing) };
   });
-  const budget = lineItems.reduce((s, li) => s + li.budget, 0);
-  const spent = lineItems.reduce((s, li) => s + li.spent, 0);
-  const expected = lineItems.reduce((s, li) => s + li.expected, 0);
-  const pacing = pacingOf(spent, expected);
-  return { ...c, lineItems, budget, spent, expected, pacing, status: statusOf(pacing) };
-});
+}
+
+function computeAlerts(campaigns) {
+  const alerts = [];
+  campaigns.forEach((c) => {
+    c.lineItems.forEach((li) => {
+      if (li.status !== "healthy") {
+        alerts.push({
+          id: `${c.id}-${li.id}`,
+          campaignId: c.id,
+          campaignName: c.name,
+          lineItemId: li.id,
+          lineItemLabel: `${li.id} · ${li.name} · ${li.audience}`,
+          status: li.status,
+          pacing: li.pacing,
+        });
+      }
+    });
+  });
+  const now = Date.now();
+  alerts.forEach((a, i) => {
+    a.timestamp = now - i * 11 * 60 * 1000;
+  });
+  return alerts;
+}
 
 const STATUS_META = {
   healthy: { label: "Healthy", color: "var(--healthy)", soft: "var(--healthy-soft)", Icon: CheckCircle2 },
@@ -95,29 +129,6 @@ function fmtMoney(n) {
 function fmtNum(n) {
   return n.toLocaleString("en-US");
 }
-
-/* Alerts derived from non-healthy line items, newest first */
-const ALERTS = [];
-CAMPAIGNS.forEach((c) => {
-  c.lineItems.forEach((li) => {
-    if (li.status !== "healthy") {
-      ALERTS.push({
-        id: `${c.id}-${li.id}`,
-        campaignId: c.id,
-        campaignName: c.name,
-        lineItemId: li.id,
-        lineItemLabel: `${li.id} · ${li.name} · ${li.audience}`,
-        status: li.status,
-        pacing: li.pacing,
-      });
-    }
-  });
-});
-const NOW = Date.now();
-ALERTS.forEach((a, i) => {
-  a.timestamp = NOW - i * 11 * 60 * 1000;
-});
-
 function timeLabel(ts) {
   return new Date(ts).toLocaleString("en-US", {
     month: "short",
@@ -218,14 +229,15 @@ function StatusBadge({ status, size = "md" }) {
   );
 }
 
-function LiveBadge() {
+function LiveBadge({ onRefresh, refreshing }) {
   return (
-    <span className="cm-live">
+    <button className="cm-live" onClick={onRefresh} title="Refresh live data now">
       <span className="cm-live-dot">
         <span className="cm-live-ping" />
       </span>
-      LIVE · updated moments ago
-    </span>
+      {refreshing ? "Refreshing…" : "LIVE · updated moments ago"}
+      <RefreshCw size={12} className={refreshing ? "cm-spin" : ""} />
+    </button>
   );
 }
 
@@ -284,20 +296,20 @@ function Sidebar({ view, setView, alertCount, actionsCount }) {
   );
 }
 
-function Dashboard({ goToCampaign, setView }) {
-  const totalBudget = CAMPAIGNS.reduce((s, c) => s + c.budget, 0);
-  const totalSpent = CAMPAIGNS.reduce((s, c) => s + c.spent, 0);
-  const totalExpected = CAMPAIGNS.reduce((s, c) => s + c.expected, 0);
+function Dashboard({ campaigns, alerts, setView, onRefresh, refreshing }) {
+  const totalBudget = campaigns.reduce((s, c) => s + c.budget, 0);
+  const totalSpent = campaigns.reduce((s, c) => s + c.spent, 0);
+  const totalExpected = campaigns.reduce((s, c) => s + c.expected, 0);
   const overallPacing = pacingOf(totalSpent, totalExpected);
   const campaignStatusCounts = { healthy: 0, under: 0, over: 0 };
-  CAMPAIGNS.forEach((c) => campaignStatusCounts[c.status]++);
+  campaigns.forEach((c) => campaignStatusCounts[c.status]++);
 
-  const allLineItems = CAMPAIGNS.flatMap((c) => c.lineItems);
+  const allLineItems = campaigns.flatMap((c) => c.lineItems);
   const liCounts = { healthy: 0, under: 0, over: 0 };
   allLineItems.forEach((li) => liCounts[li.status]++);
-  const total = allLineItems.length;
+  const total = allLineItems.length || 1;
 
-  const chartData = CAMPAIGNS.map((c) => ({
+  const chartData = campaigns.map((c) => ({
     name: c.name.split(" ").slice(0, 2).join(" "),
     pacing: c.pacing,
     status: c.status,
@@ -308,7 +320,7 @@ function Dashboard({ goToCampaign, setView }) {
       <PageHeader
         title="Pacing Overview"
         subtitle="Real-time delivery health across all active campaigns and line items."
-        right={<LiveBadge />}
+        right={<LiveBadge onRefresh={onRefresh} refreshing={refreshing} />}
       />
 
       <div className="cm-stat-grid">
@@ -319,10 +331,10 @@ function Dashboard({ goToCampaign, setView }) {
           sub="vs expected today"
           valueColor="var(--healthy)"
         />
-        <StatCard label="Active Campaigns" value={CAMPAIGNS.length} sub={`${total} line items`} />
+        <StatCard label="Active Campaigns" value={campaigns.length} sub={`${allLineItems.length} line items`} />
         <StatCard
           label="Open Alerts"
-          value={ALERTS.length}
+          value={alerts.length}
           sub="requires attention"
           valueColor="var(--under)"
         />
@@ -404,7 +416,7 @@ function Dashboard({ goToCampaign, setView }) {
         </div>
       </div>
     </div>
-  );
+    );
 }
 
 function StatCard({ label, value, sub, valueColor }) {
@@ -435,12 +447,12 @@ function PageHeader({ title, subtitle, right, back }) {
   );
 }
 
-function CampaignsList({ goToCampaign }) {
+function CampaignsList({ campaigns, goToCampaign }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [openFilter, setOpenFilter] = useState(false);
 
-  const filtered = CAMPAIGNS.filter((c) => {
+  const filtered = campaigns.filter((c) => {
     const matchesQuery =
       c.name.toLowerCase().includes(query.toLowerCase()) ||
       c.advertiser.toLowerCase().includes(query.toLowerCase());
@@ -646,9 +658,9 @@ function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, app
   );
 }
 
-function AlertsPage({ goToLineItem }) {
-  const under = ALERTS.filter((a) => a.status === "under").length;
-  const over = ALERTS.filter((a) => a.status === "over").length;
+function AlertsPage({ alerts, goToLineItem }) {
+  const under = alerts.filter((a) => a.status === "under").length;
+  const over = alerts.filter((a) => a.status === "over").length;
 
   return (
     <div>
@@ -657,13 +669,14 @@ function AlertsPage({ goToLineItem }) {
         subtitle="Pacing anomalies requiring intervention. Click any alert to jump to the line item."
       />
       <div className="cm-stat-grid cm-stat-grid-3">
-        <StatCard label="Total Alerts" value={ALERTS.length} sub=" " />
+        <StatCard label="Total Alerts" value={alerts.length} sub=" " />
         <StatCard label="Under-pacing" value={under} sub=" " valueColor="var(--under)" />
         <StatCard label="Over-pacing" value={over} sub=" " valueColor="var(--over)" />
       </div>
 
       <div className="cm-card cm-alert-card">
-        {ALERTS.map((a) => {
+        {alerts.length === 0 && <div className="cm-empty">No alerts — everything is pacing within range.</div>}
+        {alerts.map((a) => {
           const meta = STATUS_META[a.status];
           const Icon = meta.Icon;
           return (
@@ -801,6 +814,17 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
   );
 }
 
+function FullScreenState({ icon, title, sub, action }) {
+  return (
+    <div className="cm-fullscreen-state">
+      {icon}
+      <div className="cm-fullscreen-title">{title}</div>
+      <div className="cm-fullscreen-sub">{sub}</div>
+      {action}
+    </div>
+  );
+}
+
 export default function App() {
   useEffect(() => {
     const link1 = document.createElement("link");
@@ -818,6 +842,38 @@ export default function App() {
   const [actions, setActions] = useState([]);
   const [approvedMap, setApprovedMap] = useState({});
   const [toast, setToast] = useState(null);
+
+  const [campaigns, setCampaigns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+
+  const fetchData = useCallback(async (isManualRefresh) => {
+    if (isManualRefresh) setRefreshing(true);
+    try {
+      const res = await fetch(`${SHEET_CSV_URL}&t=${Date.now()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Sheet request failed (status ${res.status})`);
+      const text = await res.text();
+      const rows = parseCSV(text);
+      const raw = rowsToRawCampaigns(rows);
+      if (raw.length === 0) throw new Error("The sheet returned no campaign rows.");
+      setCampaigns(computeCampaigns(raw));
+      setError(null);
+    } catch (e) {
+      setError(e.message || "Could not load live data.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData(false);
+    const interval = setInterval(() => fetchData(false), REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
+  const alerts = useMemo(() => computeAlerts(campaigns), [campaigns]);
 
   function setView(v) {
     setHighlightLineItemId(null);
@@ -860,15 +916,43 @@ export default function App() {
     setTimeout(() => setToast(null), 3200);
   }
 
-  const selectedCampaign = CAMPAIGNS.find((c) => c.id === selectedCampaignId);
+  const selectedCampaign = campaigns.find((c) => c.id === selectedCampaignId);
 
-  return (
-    <div className="cm-root">
-      <style>{CSS}</style>
-      <Sidebar view={view} setView={setView} alertCount={ALERTS.length} actionsCount={actions.length} />
-      <main className="cm-main">
-        {view === "dashboard" && <Dashboard goToCampaign={goToCampaign} setView={setView} />}
-        {view === "campaigns" && <CampaignsList goToCampaign={goToCampaign} />}
+  let mainContent;
+  if (loading) {
+    mainContent = (
+      <FullScreenState
+        icon={<RefreshCw size={26} className="cm-spin" color="var(--accent)" />}
+        title="Loading live campaign data…"
+        sub="Fetching the latest numbers from your data source."
+      />
+    );
+  } else if (error && campaigns.length === 0) {
+    mainContent = (
+      <FullScreenState
+        icon={<AlertTriangle size={26} color="var(--under)" />}
+        title="Couldn't load live data"
+        sub={error}
+        action={
+          <button className="cm-btn-primary" style={{ marginTop: 14 }} onClick={() => fetchData(true)}>
+            <RefreshCw size={14} /> Try again
+          </button>
+        }
+      />
+    );
+  } else {
+    mainContent = (
+      <>
+        {view === "dashboard" && (
+          <Dashboard
+            campaigns={campaigns}
+            alerts={alerts}
+            setView={setView}
+            onRefresh={() => fetchData(true)}
+            refreshing={refreshing}
+          />
+        )}
+        {view === "campaigns" && <CampaignsList campaigns={campaigns} goToCampaign={goToCampaign} />}
         {view === "campaignDetail" && selectedCampaign && (
           <CampaignDetail
             campaign={selectedCampaign}
@@ -878,9 +962,17 @@ export default function App() {
             approvedMap={approvedMap}
           />
         )}
-        {view === "alerts" && <AlertsPage goToLineItem={goToLineItem} />}
+        {view === "alerts" && <AlertsPage alerts={alerts} goToLineItem={goToLineItem} />}
         {view === "actions" && <ActionsTakenPage actions={actions} />}
-      </main>
+      </>
+    );
+  }
+
+  return (
+    <div className="cm-root">
+      <style>{CSS}</style>
+      <Sidebar view={view} setView={setView} alertCount={alerts.length} actionsCount={actions.length} />
+      <main className="cm-main">{mainContent}</main>
 
       {modalCtx && (
         <TakeActionModal
@@ -900,6 +992,7 @@ export default function App() {
     </div>
   );
 }
+
 const CSS = `
 .cm-root {
   --bg: #F5F6F8;
@@ -990,9 +1083,12 @@ const CSS = `
   padding: 7px 12px; border-radius: 999px; font-family: var(--font-mono);
   font-size: 12px; color: var(--ink-2); white-space: nowrap; height: fit-content;
 }
+.cm-live:hover { border-color: var(--border-strong); }
 .cm-live-dot { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--healthy); display:inline-block; }
 .cm-live-ping { position: absolute; inset: -4px; border-radius: 50%; background: var(--healthy); opacity: .35; animation: cmPing 1.8s cubic-bezier(0,0,0.2,1) infinite; }
 @keyframes cmPing { 0% { transform: scale(0.6); opacity: .5; } 100% { transform: scale(2.2); opacity: 0; } }
+.cm-spin { animation: cmSpin 1s linear infinite; }
+@keyframes cmSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 .cm-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; }
 .cm-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px; }
@@ -1107,6 +1203,13 @@ button.cm-table-row:hover { background: var(--surface-2); }
 .cm-empty-state { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 48px 20px; }
 .cm-empty-title { font-weight: 700; font-family: var(--font-display); font-size: 15px; }
 .cm-empty-sub { color: var(--ink-3); font-size: 13px; max-width: 360px; }
+
+.cm-fullscreen-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; min-height: 60vh; gap: 10px;
+}
+.cm-fullscreen-title { font-family: var(--font-display); font-weight: 700; font-size: 17px; margin-top: 4px; }
+.cm-fullscreen-sub { color: var(--ink-3); font-size: 13.5px; max-width: 360px; }
 
 .cm-modal-overlay {
   position: fixed; inset: 0; background: rgba(15,20,26,0.4); backdrop-filter: blur(2px);
