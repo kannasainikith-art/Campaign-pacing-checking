@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { supabase } from "./supabaseClient";
 import {
   LayoutDashboard,
   Megaphone,
@@ -832,6 +833,35 @@ function FullScreenState({ icon, title, sub, action }) {
 }
 
 export default function App() {
+  const [session, setSession] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthChecked(true);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_e, s) => {
+      setSession(s);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  async function handleLogin() {
+    setLoginError(null);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: loginEmail,
+      password: loginPassword,
+    });
+    if (error) setLoginError(error.message);
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+  }
   useEffect(() => {
     const link1 = document.createElement("link");
     link1.rel = "stylesheet";
@@ -856,12 +886,11 @@ export default function App() {
   const fetchData = useCallback(async (isManualRefresh) => {
     if (isManualRefresh) setRefreshing(true);
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/campaign_pacing?select=*`, {
-        headers: { apikey: SUPABASE_KEY },
-      });
-      if (!res.ok) throw new Error(`Database request failed (status ${res.status})`);
-      const rows = await res.json();
-      const raw = rowsToRawCampaigns(rows);
+      const { data: rows, error: readErr } = await supabase
+  .from("campaign_pacing")
+  .select("*");
+if (readErr) throw new Error(`Database request failed: ${readErr.message}`);
+const raw = rowsToRawCampaigns(rows);
       if (raw.length === 0) throw new Error("No campaign rows found in the database.");
       setCampaigns(computeCampaigns(raw));
       setError(null);
@@ -926,13 +955,9 @@ export default function App() {
     setTimeout(() => setToast(null), 3200);
 
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/actions_taken`, {
-        method: "POST",
-        headers: {
-          apikey: SUPABASE_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      const { error: writeErr } = await supabase
+        .from("actions_taken")
+        .insert({
           campaign_name: campaign.name,
           li_id: lineItem.id,
           li_name: lineItem.name,
@@ -941,14 +966,46 @@ export default function App() {
           impact: suggestion.impact,
           li_status: lineItem.status,
           simulated_gam_payload: gamPayload,
-        }),
-      });
+        });
+      if (writeErr) console.error("Failed to persist action to Supabase:", writeErr);
     } catch (e) {
       console.error("Failed to persist action to Supabase:", e);
     }
   }
 
   const selectedCampaign = campaigns.find((c) => c.id === selectedCampaignId);
+
+  if (!authChecked) {
+    return <div style={{ padding: 40, textAlign: "center" }}>Loading…</div>;
+  }
+
+  if (!session) {
+    return (
+      <div style={{ maxWidth: 320, margin: "80px auto", padding: 24 }}>
+        <h2>Campaign Manager</h2>
+        <p>Please sign in to continue.</p>
+        <input
+          type="email"
+          placeholder="Email"
+          value={loginEmail}
+          onChange={(e) => setLoginEmail(e.target.value)}
+          style={{ display: "block", width: "100%", marginBottom: 8, padding: 8 }}
+        />
+        <input
+          type="password"
+          placeholder="Password"
+          value={loginPassword}
+          onChange={(e) => setLoginPassword(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+          style={{ display: "block", width: "100%", marginBottom: 8, padding: 8 }}
+        />
+        <button className="cm-btn-primary" onClick={handleLogin} style={{ width: "100%" }}>
+          Sign in
+        </button>
+        {loginError && <p style={{ color: "var(--under)", marginTop: 8 }}>{loginError}</p>}
+      </div>
+    );
+  }
 
   let mainContent;
   if (loading) {
