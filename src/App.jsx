@@ -902,11 +902,38 @@ const raw = rowsToRawCampaigns(rows);
     }
   }, []);
 
+  const fetchActions = useCallback(async () => {
+    try {
+      const { data: rows, error: actErr } = await supabase
+        .from("actions_taken")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (actErr) throw new Error(actErr.message);
+
+      const mapped = rows.map((r) => ({
+        id: String(r.id),
+        title: r.title,
+        description: r.description,
+        impact: r.impact,
+        liStatus: r.li_status,
+        campaignName: r.campaign_name,
+        lineItemId: r.li_id,
+        lineItemName: r.li_name,
+        timestamp: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+      }));
+
+      setActions(mapped);
+    } catch (e) {
+      console.error("Failed to load saved actions:", e);
+    }
+  }, []);
+
   useEffect(() => {
     fetchData(false);
+    fetchActions();
     const interval = setInterval(() => fetchData(false), REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [fetchData]);
+ }, [fetchData, fetchActions]);
 
   const alerts = useMemo(() => computeAlerts(campaigns), [campaigns]);
 
@@ -968,6 +995,7 @@ const raw = rowsToRawCampaigns(rows);
           simulated_gam_payload: gamPayload,
         });
       if (writeErr) console.error("Failed to persist action to Supabase:", writeErr);
+      if (!writeErr) fetchActions();
     } catch (e) {
       console.error("Failed to persist action to Supabase:", e);
     }
