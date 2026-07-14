@@ -79,7 +79,9 @@ function computeCampaigns(rawCampaigns) {
     const imp = lineItems.reduce((s, li) => s + li.imp, 0);
     const expectedImp = lineItems.reduce((s, li) => s + li.expectedImp, 0);
     const pacing = pacingOf(imp, expectedImp);
-    return { ...c, lineItems, budget, spent, imp, expectedImp, pacing, status: statusOf(pacing) };
+    const issues = [...new Set(lineItems.map((li) => li.status).filter((s) => s !== "healthy"))];
+    const status = issues.length === 0 ? "healthy" : issues.length === 1 ? issues[0] : "mixed";
+    return { ...c, lineItems, budget, spent, imp, expectedImp, pacing, status, issues };
   });
 }
 
@@ -231,6 +233,19 @@ function StatusBadge({ status, size = "md" }) {
     >
       <Icon size={size === "sm" ? 12 : 13} strokeWidth={2.3} />
       {meta.label}
+    </span>
+  );
+}
+
+function CampaignStatusBadges({ campaign, size = "md" }) {
+  if (!campaign.issues || campaign.issues.length === 0) {
+    return <StatusBadge status="healthy" size={size} />;
+  }
+  return (
+    <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+      {campaign.issues.map((s) => (
+        <StatusBadge key={s} status={s} size={size} />
+      ))}
     </span>
   );
 }
@@ -463,7 +478,9 @@ function CampaignsList({ campaigns, goToCampaign }) {
     const matchesQuery =
       c.name.toLowerCase().includes(query.toLowerCase()) ||
       c.advertiser.toLowerCase().includes(query.toLowerCase());
-    const matchesStatus = statusFilter === "all" || c.status === statusFilter;
+    const matchesStatus =
+      statusFilter === "all" ||
+      (statusFilter === "healthy" ? c.status === "healthy" : (c.issues || []).includes(statusFilter));
     return matchesQuery && matchesStatus;
   });
 
@@ -549,7 +566,7 @@ function CampaignsList({ campaigns, goToCampaign }) {
               <PacingBar pacing={c.pacing} status={c.status} />
             </span>
             <span>
-              <StatusBadge status={c.status} size="sm" />
+              <CampaignStatusBadges campaign={c} size="sm" />
             </span>
           </button>
         ))}
@@ -580,7 +597,7 @@ function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, app
               {campaign.advertiser}{campaign.objective ? ` · ${campaign.objective}` : ""}
             </p>
           </div>
-          <StatusBadge status={campaign.status} />
+          <CampaignStatusBadges campaign={campaign} />
         </div>
         <PulseDivider />
       </div>
