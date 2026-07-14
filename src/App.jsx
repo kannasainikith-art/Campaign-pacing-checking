@@ -324,7 +324,13 @@ function Dashboard({ campaigns, alerts, setView, onRefresh, refreshing }) {
   const totalExpectedImp = campaigns.reduce((s, c) => s + c.expectedImp, 0);
   const overallPacing = pacingOf(totalImp, totalExpectedImp);
   const campaignStatusCounts = { healthy: 0, under: 0, over: 0 };
-  campaigns.forEach((c) => campaignStatusCounts[c.status]++);
+  campaigns.forEach((c) => {
+    if (!c.issues || c.issues.length === 0) {
+      campaignStatusCounts.healthy++;
+    } else {
+      c.issues.forEach((s) => campaignStatusCounts[s]++);
+    }
+  });
 
   const allLineItems = campaigns.flatMap((c) => c.lineItems);
   const liCounts = { healthy: 0, under: 0, over: 0 };
@@ -481,7 +487,6 @@ function CampaignsList({ campaigns, goToCampaign }) {
     const matchesStatus =
       statusFilter === "all" ||
       (statusFilter === "healthy" ? c.status === "healthy" : (c.issues || []).includes(statusFilter));
-    return matchesQuery && matchesStatus;
   });
 
   const filterLabel =
@@ -609,7 +614,7 @@ function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, app
           label="Pacing"
           value={`${campaign.pacing}%`}
           sub=" "
-          valueColor={STATUS_META[campaign.status].color}
+          valueColor={STATUS_META[campaign.status]?.color || "var(--ink)"}
         />
         <StatCard label="Line Items" value={campaign.lineItems.length} sub=" " />
       </div>
