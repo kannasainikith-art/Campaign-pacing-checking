@@ -488,6 +488,7 @@ function CampaignsList({ campaigns, goToCampaign }) {
     const matchesStatus =
       statusFilter === "all" ||
       (statusFilter === "healthy" ? c.status === "healthy" : (c.issues || []).includes(statusFilter));
+    return matchesQuery && matchesStatus;
   });
 
   const filterLabel =
