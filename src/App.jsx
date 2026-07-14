@@ -113,6 +113,7 @@ const STATUS_META = {
   healthy: { label: "Healthy", color: "var(--healthy)", soft: "var(--healthy-soft)", Icon: CheckCircle2 },
   under: { label: "Under-pacing", color: "var(--under)", soft: "var(--under-soft)", Icon: AlertTriangle },
   over: { label: "Over-pacing", color: "var(--over)", soft: "var(--over-soft)", Icon: Activity },
+  mixed: { label: "Mixed", color: "var(--under)", soft: "var(--under-soft)", Icon: AlertTriangle },
 };
 
 function fmtMoney(n) {
@@ -263,7 +264,7 @@ function LiveBadge({ onRefresh, refreshing }) {
 }
 
 function PacingBar({ pacing, status }) {
-  const meta = STATUS_META[status];
+  const meta = STATUS_META[status] || STATUS_META.healthy;
   const width = Math.max(4, Math.min(100, pacing));
   return (
     <div className="cm-pacingbar-track">
@@ -400,7 +401,7 @@ function Dashboard({ campaigns, alerts, setView, onRefresh, refreshing }) {
                     <div className="cm-simplechart-band" />
                     <div
                       className="cm-simplechart-bar"
-                      style={{ height: `${height}%`, background: STATUS_META[d.status].color }}
+                      style={{ height: `${height}%`, background: (STATUS_META[d.status] || STATUS_META.healthy).color }}
                       title={`${d.name}: ${d.pacing}%`}
                     />
                   </div>
