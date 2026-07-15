@@ -391,25 +391,35 @@ function Dashboard({ campaigns, alerts, setView, onRefresh, refreshing }) {
       <div className="cm-two-col">
         <div className="cm-card cm-chart-card">
           <div className="cm-card-title">Campaign Pacing (%)</div>
-          <div className="cm-card-sub">100% = on-pace · reference band 90–110%</div>
-          <div className="cm-simplechart">
-            {chartData.map((d, i) => {
-              const height = Math.max(4, Math.min(100, (d.pacing / 150) * 100));
-              return (
-                <div className="cm-simplechart-col" key={i}>
-                  <div className="cm-simplechart-bar-track">
-                    <div className="cm-simplechart-band" />
-                    <div
-                      className="cm-simplechart-bar"
-                      style={{ height: `${height}%`, background: (STATUS_META[d.status] || STATUS_META.healthy).color }}
-                      title={`${d.name}: ${d.pacing}%`}
-                    />
+          <div className="cm-card-sub">100% = on-pace · sorted worst-first · reference line at 100%</div>
+          <div className="cm-hbar-list">
+            {[...campaigns]
+              .sort((a, b) => {
+                const rank = { under: 0, mixed: 1, over: 2, healthy: 3 };
+                const ra = rank[a.status] ?? 3;
+                const rb = rank[b.status] ?? 3;
+                if (ra !== rb) return ra - rb;
+                return a.pacing - b.pacing; // within a group, lowest pacing first
+              })
+              .map((c) => {
+                const meta = STATUS_META[c.status] || STATUS_META.healthy;
+                const width = Math.max(2, Math.min(100, (c.pacing / 150) * 100));
+                return (
+                  <div className="cm-hbar-row" key={c.id} title={`${c.name}: ${c.pacing}%`}>
+                    <div className="cm-hbar-name">{c.name}</div>
+                    <div className="cm-hbar-track">
+                      <div className="cm-hbar-ref" />
+                      <div
+                        className="cm-hbar-fill"
+                        style={{ width: `${width}%`, background: meta.color }}
+                      />
+                    </div>
+                    <div className="cm-hbar-value cm-mono" style={{ color: meta.color }}>
+                      {c.pacing}%
+                    </div>
                   </div>
-                  <div className="cm-simplechart-value cm-mono">{d.pacing}%</div>
-                  <div className="cm-simplechart-label">{d.name}</div>
-                </div>
-              );
-            })}
+                );
+              })}
           </div>
         </div>
 
@@ -1402,6 +1412,55 @@ button.cm-table-row:hover { background: var(--surface-2); }
 .cm-simplechart-bar { width: 100%; border-radius: 4px 4px 0 0; transition: height .3s ease; }
 .cm-simplechart-value { font-size: 12px; font-weight: 700; margin-top: 8px; }
 .cm-simplechart-label { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; text-align: center; line-height: 1.3; }
+.cm-hbar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+.cm-hbar-row {
+  display: grid;
+  grid-template-columns: 150px 1fr 52px;
+  align-items: center;
+  gap: 12px;
+}
+.cm-hbar-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cm-hbar-track {
+  position: relative;
+  height: 20px;
+  background: var(--surface-2);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.cm-hbar-ref {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 66.6%;
+  width: 1px;
+  background: var(--border-strong);
+  z-index: 1;
+}
+.cm-hbar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width .3s ease;
+}
+.cm-hbar-value {
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+}
 
 @media (max-width: 900px) {
   .cm-two-col { grid-template-columns: 1fr; }
