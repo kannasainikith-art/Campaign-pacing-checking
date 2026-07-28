@@ -3,14 +3,25 @@
 // for a single line item, using its real pacing + GAM settings data.
 //
 // SECURITY: GEMINI_API_KEY must be set as a Supabase Edge Function secret
-// (never in frontend code, never in the repo).
+// (never in frontend code, never in the repo). Set it with:
+//   supabase secrets set GEMINI_API_KEY=your_key_here
+//
+// Deploy with:
+//   supabase functions deploy generate-suggestion
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-const GEMINI_MODEL = "gemini-flash-latest";
+const GEMINI_MODEL = "gemini-flash-latest"; // alias that always points to Google's current free-tier Flash model — avoids breaking when specific versions get retired
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
+// --- Diagnostic runbook baked into the system prompt ---
+// This is the "why" reasoning scaffold discussed earlier: forces Claude/Gemini
+// to name a root cause from the actual GAM settings before recommending a fix,
+// rather than defaulting to generic advice.
 const SYSTEM_PROMPT = `You are an ad-ops pacing diagnostic assistant for Google Ad Manager (GAM) line items.
 
 You will receive the real current state of one line item: its goal, delivered impressions, flight dates, pacing percentage, and its GAM settings (priority, available inventory, creative status, delivery settings, frequency cap).
@@ -56,9 +67,16 @@ interface LineItemInput {
 }
 
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   try {
     if (req.method !== "POST") {
-      return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405 });
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
+        headers: corsHeaders,
+      });
     }
 
     const input: LineItemInput = await req.json();
@@ -66,10 +84,11 @@ Deno.serve(async (req) => {
     if (!input.li_id || !input.gam_settings) {
       return new Response(
         JSON.stringify({ error: "Missing required fields: li_id and gam_settings" }),
-        { status: 400 }
+        { status: 400, headers: corsHeaders }
       );
     }
 
+    // Build the user-turn content: the real line item snapshot
     const userContent = `Line item: ${input.li_name} (${input.li_id})
 Campaign: ${input.campaign_name}
 Goal (contracted impressions): ${input.goal}
@@ -93,7 +112,7 @@ Diagnose the root cause and recommend one specific fix.`;
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.2,
+          temperature: 0.2, // low temp: we want consistent, grounded diagnosis, not creative variation
           responseMimeType: "application/json",
         },
       }),
@@ -104,7 +123,7 @@ Diagnose the root cause and recommend one specific fix.`;
       console.error("Gemini API error:", errText);
       return new Response(
         JSON.stringify({ error: "Gemini API call failed", detail: errText }),
-        { status: 502 }
+        { status: 502, headers: corsHeaders }
       );
     }
 
@@ -114,7 +133,7 @@ Diagnose the root cause and recommend one specific fix.`;
     if (!rawText) {
       return new Response(
         JSON.stringify({ error: "Gemini returned no content", raw: geminiData }),
-        { status: 502 }
+        { status: 502, headers: corsHeaders }
       );
     }
 
@@ -124,36 +143,22 @@ Diagnose the root cause and recommend one specific fix.`;
     } catch (e) {
       return new Response(
         JSON.stringify({ error: "Failed to parse Gemini response as JSON", raw: rawText }),
-        { status: 502 }
+        { status: 502, headers: corsHeaders }
       );
     }
 
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-    );
-
-    const { error: insertError } = await supabase.from("actions_taken").insert({
-      campaign_name: input.campaign_name,
-      li_id: input.li_id,
-      li_name: input.li_name,
-      title: suggestion.title,
-      description: `${suggestion.diagnosis} ${suggestion.recommended_fix}`,
-      impact: suggestion.expected_impact,
-      li_status: input.status,
-      simulated_gam_payload: null,
-      approved_by: null,
-    });
-
-    if (insertError) {
-      console.error("Supabase insert error:", insertError);
-    }
+    // NOTE: we intentionally do NOT insert into actions_taken here.
+    // Logging only happens when a human approves the suggestion (handled in the frontend's approveAction),
+    // so unapproved/cancelled suggestions never pollute the permanent audit trail.
 
     return new Response(JSON.stringify(suggestion), {
-      headers: { "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
     console.error("Unexpected error:", err);
-    return new Response(JSON.stringify({ error: "Unexpected server error" }), { status: 500 });
+    return new Response(JSON.stringify({ error: "Unexpected server error" }), {
+      status: 500,
+      headers: corsHeaders,
+    });
   }
 });
