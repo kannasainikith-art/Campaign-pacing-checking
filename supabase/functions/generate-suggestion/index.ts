@@ -1,4 +1,7 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const GEMINI_MODEL = "gemini-flash-latest";
@@ -49,9 +52,16 @@ interface LineItemInput {
 }
 
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   try {
     if (req.method !== "POST") {
-      return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405 });
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
+        headers: corsHeaders,
+      });
     }
 
     const input: LineItemInput = await req.json();
@@ -59,7 +69,7 @@ Deno.serve(async (req) => {
     if (!input.li_id || !input.gam_settings) {
       return new Response(
         JSON.stringify({ error: "Missing required fields: li_id and gam_settings" }),
-        { status: 400 }
+        { status: 400, headers: corsHeaders }
       );
     }
 
@@ -97,7 +107,7 @@ Diagnose the root cause and recommend one specific fix.`;
       console.error("Gemini API error:", errText);
       return new Response(
         JSON.stringify({ error: "Gemini API call failed", detail: errText }),
-        { status: 502 }
+        { status: 502, headers: corsHeaders }
       );
     }
 
@@ -107,7 +117,7 @@ Diagnose the root cause and recommend one specific fix.`;
     if (!rawText) {
       return new Response(
         JSON.stringify({ error: "Gemini returned no content", raw: geminiData }),
-        { status: 502 }
+        { status: 502, headers: corsHeaders }
       );
     }
 
@@ -117,36 +127,18 @@ Diagnose the root cause and recommend one specific fix.`;
     } catch (e) {
       return new Response(
         JSON.stringify({ error: "Failed to parse Gemini response as JSON", raw: rawText }),
-        { status: 502 }
+        { status: 502, headers: corsHeaders }
       );
     }
 
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-    );
-
-    const { error: insertError } = await supabase.from("actions_taken").insert({
-      campaign_name: input.campaign_name,
-      li_id: input.li_id,
-      li_name: input.li_name,
-      title: suggestion.title,
-      description: `${suggestion.diagnosis} ${suggestion.recommended_fix}`,
-      impact: suggestion.expected_impact,
-      li_status: input.status,
-      simulated_gam_payload: null,
-      approved_by: null,
-    });
-
-    if (insertError) {
-      console.error("Supabase insert error:", insertError);
-    }
-
     return new Response(JSON.stringify(suggestion), {
-      headers: { "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
     console.error("Unexpected error:", err);
-    return new Response(JSON.stringify({ error: "Unexpected server error" }), { status: 500 });
+    return new Response(JSON.stringify({ error: "Unexpected server error" }), {
+      status: 500,
+      headers: corsHeaders,
+    });
   }
 });

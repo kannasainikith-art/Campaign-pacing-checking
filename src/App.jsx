@@ -793,8 +793,54 @@ function ActionsTakenPage({ actions }) {
 }
 
 function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
-  const suggestions = useMemo(() => getSuggestions(campaign, lineItem), [campaign, lineItem]);
-  const [selected, setSelected] = useState(0);
+  const [suggestion, setSuggestion] = useState(null);
+  const [loadingSuggestion, setLoadingSuggestion] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchSuggestion() {
+      setLoadingSuggestion(true);
+      setFetchError(null);
+      try {
+        const { data, error } = await supabase.functions.invoke("generate-suggestion", {
+          body: {
+            li_id: lineItem.id,
+            li_name: lineItem.name,
+            campaign_name: campaign.name,
+            goal: lineItem.expectedImp,
+            impressions_delivered: lineItem.imp,
+            flight_start: lineItem.startDate || "",
+            flight_end: lineItem.endDate || "",
+            pacing_percent: lineItem.pacing,
+            status: lineItem.status,
+            // NOTE: GAM settings aren't readable yet (pending GAM API access) —
+            // placeholders for now, real values once GAM read access is live.
+            gam_settings: {
+              priority: lineItem.priority ?? "not yet available",
+              available_inventory: lineItem.availableInventory ?? "not yet available",
+              creative_status: lineItem.creativeStatus ?? "not yet available",
+              delivery_setting: lineItem.deliverySetting ?? "not yet available",
+              frequency_cap: lineItem.frequencyCap ?? "not yet available",
+            },
+          },
+        });
+        if (error) throw error;
+        if (!cancelled) setSuggestion(data);
+      } catch (e) {
+        console.error("Failed to fetch AI suggestion:", e);
+        if (!cancelled) setFetchError("Couldn't generate a recommendation right now. Please try again.");
+      } finally {
+        if (!cancelled) setLoadingSuggestion(false);
+      }
+    }
+
+    fetchSuggestion();
+    return () => {
+      cancelled = true;
+    };
+  }, [campaign, lineItem]);
 
   return (
     <div className="cm-modal-overlay" onClick={onClose}>
@@ -802,7 +848,7 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
         <div className="cm-modal-header">
           <div>
             <div className="cm-modal-eyebrow">
-              <Sparkles size={13} /> Suggested actions
+              <Sparkles size={13} /> AI-generated recommendation
             </div>
             <div className="cm-modal-title">
               {lineItem.id} · {lineItem.name}{lineItem.audience ? ` · ${lineItem.audience}` : ""}
@@ -821,32 +867,63 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
         </div>
 
         <div className="cm-modal-body">
-          {suggestions.map((s, i) => (
-            <button
-              key={i}
-              className={`cm-suggestion ${selected === i ? "is-selected" : ""}`}
-              onClick={() => setSelected(i)}
-            >
-              <div className="cm-suggestion-radio">
-                <span className={`cm-radio-dot ${selected === i ? "is-on" : ""}`} />
-              </div>
+          {loadingSuggestion && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "24px 0" }}>
+              <RefreshCw size={20} className="cm-spin" color="var(--accent)" />
+              <span style={{ fontSize: 13, color: "var(--ink-2)" }}>Analyzing line item…</span>
+            </div>
+          )}
+
+          {!loadingSuggestion && fetchError && (
+            <div style={{ padding: "16px 0", color: "var(--under)", fontSize: 13.5 }}>{fetchError}</div>
+          )}
+
+          {!loadingSuggestion && suggestion && !fetchError && (
+            <div className="cm-suggestion is-selected" style={{ cursor: "default" }}>
               <div>
-                <div className="cm-suggestion-title">{s.title}</div>
-                <div className="cm-suggestion-desc">{s.description}</div>
+                <div className="cm-suggestion-title">{suggestion.title}</div>
+                <div className="cm-suggestion-desc">
+                  {suggestion.diagnosis} {suggestion.recommended_fix}
+                </div>
                 <div className="cm-suggestion-impact">
                   <span className="cm-dot" style={{ background: "var(--healthy)" }} />
-                  Expected impact: {s.impact}
+                  Expected impact: {suggestion.expected_impact}
                 </div>
+                {suggestion.confidence && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontSize: 11.5,
+                      color: "var(--ink-3)",
+                      textTransform: "uppercase",
+                      fontWeight: 600,
+                      letterSpacing: "0.04em",
+                    }}
+                  >
+                    Confidence: {suggestion.confidence}
+                  </div>
+                )}
               </div>
-            </button>
-          ))}
+            </div>
+          )}
         </div>
 
         <div className="cm-modal-footer">
           <button className="cm-btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button className="cm-btn-primary" onClick={() => onApprove(suggestions[selected])}>
+          <button
+            className="cm-btn-primary"
+            disabled={!suggestion || loadingSuggestion}
+            style={!suggestion || loadingSuggestion ? { opacity: 0.5, cursor: "not-allowed" } : {}}
+            onClick={() =>
+              onApprove({
+                title: suggestion.title,
+                description: `${suggestion.diagnosis} ${suggestion.recommended_fix}`,
+                impact: suggestion.expected_impact,
+              })
+            }
+          >
             <CheckCircle2 size={15} /> Approve action
           </button>
         </div>
