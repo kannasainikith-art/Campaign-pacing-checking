@@ -815,15 +815,6 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
             flight_end: lineItem.endDate || "",
             pacing_percent: lineItem.pacing,
             status: lineItem.status,
-            // NOTE: GAM settings aren't readable yet (pending GAM API access) —
-            // placeholders for now, real values once GAM read access is live.
-            gam_settings: {
-              priority: lineItem.priority ?? "not yet available",
-              available_inventory: lineItem.availableInventory ?? "not yet available",
-              creative_status: lineItem.creativeStatus ?? "not yet available",
-              delivery_setting: lineItem.deliverySetting ?? "not yet available",
-              frequency_cap: lineItem.frequencyCap ?? "not yet available",
-            },
           },
         });
         if (error) throw error;

@@ -32,7 +32,7 @@ Respond ONLY with valid JSON matching this exact shape, no markdown formatting, 
 }`;
 
 interface RequestInput {
-  li_id: string;
+  li_id: string; // the GAM line item ID (numeric string)
   li_name: string;
   campaign_name: string;
   goal: number;
@@ -43,6 +43,7 @@ interface RequestInput {
   status: "under" | "over" | "healthy" | "mixed";
 }
 
+// --- GAM auth helpers (same as test-gam-auth) ---
 function base64url(input: ArrayBuffer | string): string {
   let bytes: Uint8Array;
   if (typeof input === "string") {
@@ -112,6 +113,7 @@ async function getGamAccessToken(serviceAccountKey: {
   return tokenData.access_token;
 }
 
+// --- Fetch real line item settings from GAM ---
 async function fetchGamLineItemSettings(lineItemId: string) {
   const keyJson = Deno.env.get("GAM_SERVICE_ACCOUNT_KEY");
   const networkCode = Deno.env.get("GAM_NETWORK_CODE");
@@ -130,6 +132,7 @@ async function fetchGamLineItemSettings(lineItemId: string) {
     throw new Error(`GAM line item fetch failed: ${JSON.stringify(data)}`);
   }
 
+  // Extract only what we need for the diagnosis, in plain readable form
   const fcap = data.frequencyCaps?.[0];
   return {
     priority: data.priority ?? "unknown",
@@ -163,6 +166,7 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Step 1: Fetch REAL GAM settings for this line item
     let gamSettings;
     try {
       gamSettings = await fetchGamLineItemSettings(input.li_id);
@@ -174,6 +178,7 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Step 2: Build the prompt with real pacing + real GAM settings
     const userContent = `Line item: ${input.li_name} (${input.li_id})
 Campaign: ${input.campaign_name}
 Goal (contracted impressions): ${input.goal}
@@ -189,6 +194,7 @@ Real GAM settings (fetched live):
 
 Diagnose the root cause and recommend one specific fix.`;
 
+    // Step 3: Call Gemini
     const geminiResponse = await fetch(GEMINI_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -231,6 +237,7 @@ Diagnose the root cause and recommend one specific fix.`;
       );
     }
 
+    // Include the real GAM settings used, so the frontend/audit trail can show what informed the diagnosis
     suggestion._gam_settings_used = gamSettings;
 
     return new Response(JSON.stringify(suggestion), {
