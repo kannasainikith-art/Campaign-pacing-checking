@@ -41,8 +41,9 @@ function rowsToRawCampaigns(rows) {
       order.push(campaignId);
     }
 
-    byCampaign[campaignId].lineItems.push({
+   byCampaign[campaignId].lineItems.push({
       id: r.li_id,
+      gamLineItemId: r.gam_line_item_id || null,
       name: r.li_name,
       audience: "",
       platform: "Google Ad Manager",
@@ -806,7 +807,7 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
       try {
         const { data, error } = await supabase.functions.invoke("generate-suggestion", {
           body: {
-            li_id: lineItem.id,
+            li_id: lineItem.gamLineItemId || lineItem.id,
             li_name: lineItem.name,
             campaign_name: campaign.name,
             goal: lineItem.expectedImp,
@@ -1088,7 +1089,7 @@ const raw = rowsToRawCampaigns(rows);
         .from("actions_taken")
         .insert({
           campaign_name: campaign.name,
-          li_id: lineItem.id,
+          li_id: lineItem.gamLineItemId || lineItem.id,
           li_name: lineItem.name,
           title: suggestion.title,
           description: suggestion.description,
