@@ -9,26 +9,32 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GE
 
 const SYSTEM_PROMPT = `You are an ad-ops pacing diagnostic assistant for Google Ad Manager (GAM) line items.
 
-You will receive the real current state of one line item: its goal, delivered impressions, flight dates, pacing percentage, and its real GAM settings (priority, creative status, delivery rate setting, frequency cap).
+You will receive the real current state of one line item: its goal, delivered impressions, flight dates, pacing percentage, and its real GAM settings (line item type, priority, delivery rate setting, frequency cap).
 
-Your job: diagnose the MOST LIKELY root cause of its pacing status using the settings provided, then recommend ONE specific, actionable fix.
+CRITICAL RULE ON LINE ITEM TYPE:
+- If line_item_type is STANDARD, this is a DIRECT/GUARANTEED deal with a fixed contracted goal. Priority changes are NOT a meaningful lever and must NOT be recommended — priority-based competition matters for programmatic/price-priority inventory, not guaranteed direct deals. For STANDARD line items, choose between: frequency cap or delivery rate setting (EVENLY vs AS_FAST_AS_POSSIBLE).
+- If line_item_type is PRICE_PRIORITY, NETWORK, BULK, or HOUSE, priority IS a valid lever and can be recommended when relevant.
 
-Diagnostic reference (use this reasoning, don't just guess generically):
-- Under-pacing + low priority relative to competing line items -> likely losing the auction; recommend raising priority
-- Under-pacing + tight frequency cap -> capping delivery to the same users too early; recommend loosening the frequency cap
-- Under-pacing + creatives missing or not yet approved -> delivery is blocked at the creative level, not a pacing setting issue; recommend fixing/resubmitting the creative first
-- Over-pacing + delivery rate set to "as fast as possible" or uncapped -> delivering too fast early in the flight; recommend switching delivery rate to evenly, or adding a daily cap
-- Over-pacing + priority too high relative to goal -> cannibalizing inventory from other line items; recommend lowering priority
+Your job: diagnose the MOST LIKELY root cause of its pacing status, then recommend EXACTLY ONE specific, writable GAM field change appropriate to the line item type. You must choose field_to_change from ONLY these three options: "frequency_cap", "delivery_rate", or "priority" (priority only for non-STANDARD types). Do not suggest creative changes, targeting changes, or anything outside these three fields.
 
-Only recommend changes to fields that are real GAM settings: priority, frequency cap, delivery rate, flight dates, targeting. Do not give vague or generic advice like "monitor performance" without specifying the actual change.
+Diagnostic reference:
+- Under-pacing + tight frequency cap -> loosen it (increase maxImpressions or extend timeAmount)
+- Under-pacing + delivery rate EVENLY on a STANDARD deal falling behind -> switch to AS_FAST_AS_POSSIBLE
+- Under-pacing (non-STANDARD only) + low priority -> raise priority (lower number = higher priority in GAM, so recommend decreasing the numeric value)
+- Over-pacing + delivery rate AS_FAST_AS_POSSIBLE -> switch to EVENLY
+- Over-pacing + no meaningful frequency cap or a loose one -> tighten it
+- Over-pacing (non-STANDARD only) + priority too high -> lower priority (increase the numeric value)
 
-Respond ONLY with valid JSON matching this exact shape, no markdown formatting, no extra text:
+Respond ONLY with valid JSON matching this exact shape, no markdown formatting, no extra text. diagnosis_bullets and fix_bullets must each be an array of short, punchy bullet-point strings (3-10 words each, max 2 bullets per array):
 {
   "title": "short 5-8 word summary of the issue",
-  "diagnosis": "1-2 sentences naming the likely root cause, referencing the specific setting values given",
+  "diagnosis_bullets": ["short bullet naming the cause", "short bullet with the specific number/setting"],
   "confidence": "high | medium | low",
-  "recommended_fix": "1-2 sentences, specific and actionable, naming the exact GAM field to change and the direction",
-  "expected_impact": "1 sentence on what should improve and roughly by how much, if estimable"
+  "field_to_change": "frequency_cap | delivery_rate | priority",
+  "current_value": "exact current value matching GAM shape: frequency_cap is an object with maxImpressions, timeAmount, timeUnit DAY; delivery_rate is a string EVENLY or AS_FAST_AS_POSSIBLE; priority is a number",
+  "new_value": "the recommended new value, same shape as current_value",
+  "fix_bullets": ["short bullet with the specific action", "short bullet stating old value to new value"],
+  "expected_impact": "1 short sentence on what should improve"
 }`;
 
 interface RequestInput {
@@ -134,10 +140,10 @@ async function fetchGamLineItemSettings(lineItemId: string) {
   return {
     priority: data.priority ?? "unknown",
     delivery_setting: data.deliveryRateType ?? "unknown",
-    creative_status: data.missingCreatives === false ? "creatives attached" : "creatives missing",
     frequency_cap: fcap
       ? `${fcap.maxImpressions} impressions / ${fcap.timeAmount} ${fcap.timeUnit.toLowerCase()}`
       : "no frequency cap set",
+    line_item_type: data.lineItemType ?? "unknown",
   };
 }
 
@@ -182,9 +188,9 @@ Flight: ${input.flight_start} to ${input.flight_end}
 Pacing: ${input.pacing_percent}% (${input.status})
 
 Real GAM settings (fetched live):
+- Line item type: ${gamSettings.line_item_type}
 - Priority: ${gamSettings.priority}
 - Delivery rate setting: ${gamSettings.delivery_setting}
-- Creative status: ${gamSettings.creative_status}
 - Frequency cap: ${gamSettings.frequency_cap}
 
 Diagnose the root cause and recommend one specific fix.`;

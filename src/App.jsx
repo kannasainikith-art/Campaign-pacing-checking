@@ -867,37 +867,38 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
           )}
 
           {!loadingSuggestion && fetchError && (
-            <div style={{ padding: "16px 0", color: "var(--under)", fontSize: 13.5 }}>{fetchError}</div>
-          )}
+  <div style={{ padding: "16px 0", color: "var(--under)", fontSize: 13.5 }}>{fetchError}</div>
+)}
 
-          {!loadingSuggestion && suggestion && !fetchError && (
-            <div className="cm-suggestion is-selected" style={{ cursor: "default" }}>
-              <div>
-                <div className="cm-suggestion-title">{suggestion.title}</div>
-                <div className="cm-suggestion-desc">
-                  {suggestion.diagnosis} {suggestion.recommended_fix}
-                </div>
-                <div className="cm-suggestion-impact">
-                  <span className="cm-dot" style={{ background: "var(--healthy)" }} />
-                  Expected impact: {suggestion.expected_impact}
-                </div>
-                {suggestion.confidence && (
-                  <div
-                    style={{
-                      marginTop: 8,
-                      fontSize: 11.5,
-                      color: "var(--ink-3)",
-                      textTransform: "uppercase",
-                      fontWeight: 600,
-                      letterSpacing: "0.04em",
-                    }}
-                  >
-                    Confidence: {suggestion.confidence}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+{!loadingSuggestion && suggestion && !fetchError && (
+  <div className="cm-suggestion is-selected" style={{ cursor: "default" }}>
+    <div>
+      <div className="cm-suggestion-title">{suggestion.title}</div>
+      <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.6 }}>
+        {suggestion.diagnosis_bullets?.map((b, i) => <li key={`d-${i}`}>{b}</li>)}
+        {suggestion.fix_bullets?.map((b, i) => <li key={`f-${i}`} style={{ fontWeight: 600, color: "var(--ink)" }}>{b}</li>)}
+      </ul>
+      <div className="cm-suggestion-impact">
+        <span className="cm-dot" style={{ background: "var(--healthy)" }} />
+        Expected impact: {suggestion.expected_impact}
+      </div>
+      {suggestion.confidence && (
+        <div
+          style={{
+            marginTop: 8,
+            fontSize: 11.5,
+            color: "var(--ink-3)",
+            textTransform: "uppercase",
+            fontWeight: 600,
+            letterSpacing: "0.04em",
+          }}
+        >
+          Confidence: {suggestion.confidence}
+        </div>
+      )}
+    </div>
+  </div>
+)}
         </div>
 
         <div className="cm-modal-footer">
@@ -905,19 +906,22 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
             Cancel
           </button>
           <button
-            className="cm-btn-primary"
-            disabled={!suggestion || loadingSuggestion}
-            style={!suggestion || loadingSuggestion ? { opacity: 0.5, cursor: "not-allowed" } : {}}
-            onClick={() =>
-              onApprove({
-                title: suggestion.title,
-                description: `${suggestion.diagnosis} ${suggestion.recommended_fix}`,
-                impact: suggestion.expected_impact,
-              })
-            }
-          >
-            <CheckCircle2 size={15} /> Approve action
-          </button>
+          className="cm-btn-primary"
+          disabled={!suggestion || loadingSuggestion}
+          style={!suggestion || loadingSuggestion ? { opacity: 0.5, cursor: "not-allowed" } : {}}
+          onClick={() =>
+           onApprove({
+            title: suggestion.title,
+            description: `${suggestion.diagnosis_bullets?.join(". ")}. ${suggestion.fix_bullets?.join(". ")}`,
+            impact: suggestion.expected_impact,
+            field_to_change: suggestion.field_to_change,
+            current_value: suggestion.current_value,
+            new_value: suggestion.new_value,
+           })
+          }
+>
+  <CheckCircle2 size={15} /> Approve action
+</button>
         </div>
       </div>
     </div>

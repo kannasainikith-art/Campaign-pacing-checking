@@ -1,53 +1,43 @@
-// Supabase Edge Function: generate-suggestion
-// Calls Gemini API to generate a diagnosed, structured recommendation
-// for a single line item, using its real pacing + GAM settings data.
-//
-// SECURITY: GEMINI_API_KEY must be set as a Supabase Edge Function secret
-// (never in frontend code, never in the repo). Set it with:
-//   supabase secrets set GEMINI_API_KEY=your_key_here
-//
-// Deploy with:
-//   supabase functions deploy generate-suggestion
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-const GEMINI_MODEL = "gemini-flash-latest"; // alias that always points to Google's current free-tier Flash model — avoids breaking when specific versions get retired
+const GEMINI_MODEL = "gemini-flash-latest";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
-// --- Diagnostic runbook baked into the system prompt ---
-// This is the "why" reasoning scaffold discussed earlier: forces Claude/Gemini
-// to name a root cause from the actual GAM settings before recommending a fix,
-// rather than defaulting to generic advice.
 const SYSTEM_PROMPT = `You are an ad-ops pacing diagnostic assistant for Google Ad Manager (GAM) line items.
 
-You will receive the real current state of one line item: its goal, delivered impressions, flight dates, pacing percentage, and its GAM settings (priority, available inventory, creative status, delivery settings, frequency cap).
+You will receive the real current state of one line item: its goal, delivered impressions, flight dates, pacing percentage, and its real GAM settings (line item type, priority, delivery rate setting, frequency cap).
 
-Your job: diagnose the MOST LIKELY root cause of its pacing status using the settings provided, then recommend ONE specific, actionable fix.
+CRITICAL RULE ON LINE ITEM TYPE:
+- If line_item_type is STANDARD, this is a DIRECT/GUARANTEED deal with a fixed contracted goal. Priority changes are NOT a meaningful lever and must NOT be recommended — priority-based competition matters for programmatic/price-priority inventory, not guaranteed direct deals. For STANDARD line items, choose between: frequency cap or delivery rate setting (EVENLY vs AS_FAST_AS_POSSIBLE).
+- If line_item_type is PRICE_PRIORITY, NETWORK, BULK, or HOUSE, priority IS a valid lever and can be recommended when relevant.
 
-Diagnostic reference (use this reasoning, don't just guess generically):
-- Under-pacing + low priority relative to competing line items -> likely losing the auction; recommend raising priority
-- Under-pacing + narrow targeting or low available inventory -> insufficient matching inventory; recommend broadening targeting/geo
-- Under-pacing + tight frequency cap -> capping delivery to the same users too early; recommend loosening the frequency cap
-- Under-pacing + creative disapproved/rejected/pending -> delivery is blocked at the creative level, not a pacing setting issue; recommend fixing/resubmitting the creative first
-- Over-pacing + no daily cap set -> delivering too fast early in the flight; recommend adding/tightening a daily impression cap
-- Over-pacing + priority too high relative to goal -> cannibalizing inventory from other line items; recommend lowering priority
+Your job: diagnose the MOST LIKELY root cause of its pacing status, then recommend EXACTLY ONE specific, writable GAM field change appropriate to the line item type. You must choose field_to_change from ONLY these three options: "frequency_cap", "delivery_rate", or "priority" (priority only for non-STANDARD types). Do not suggest creative changes, targeting changes, or anything outside these three fields.
 
-Only recommend changes to fields that are real GAM settings: priority, frequency cap, daily cap, flight dates, targeting. Do not give vague or generic advice like "monitor performance" or "review targeting" without specifying the actual change.
+Diagnostic reference:
+- Under-pacing + tight frequency cap -> loosen it (increase maxImpressions or extend timeAmount)
+- Under-pacing + delivery rate EVENLY on a STANDARD deal falling behind -> switch to AS_FAST_AS_POSSIBLE
+- Under-pacing (non-STANDARD only) + low priority -> raise priority (lower number = higher priority in GAM, so recommend decreasing the numeric value)
+- Over-pacing + delivery rate AS_FAST_AS_POSSIBLE -> switch to EVENLY
+- Over-pacing + no meaningful frequency cap or a loose one -> tighten it
+- Over-pacing (non-STANDARD only) + priority too high -> lower priority (increase the numeric value)
 
-Respond ONLY with valid JSON matching this exact shape, no markdown formatting, no extra text:
+Respond ONLY with valid JSON matching this exact shape, no markdown formatting, no extra text. diagnosis_bullets and fix_bullets must each be an array of short, punchy bullet-point strings (3-10 words each, max 2 bullets per array):
 {
   "title": "short 5-8 word summary of the issue",
-  "diagnosis": "1-2 sentences naming the likely root cause, referencing the specific setting values given",
+  "diagnosis_bullets": ["short bullet naming the cause", "short bullet with the specific number/setting"],
   "confidence": "high | medium | low",
-  "recommended_fix": "1-2 sentences, specific and actionable, naming the exact GAM field to change and the direction",
-  "expected_impact": "1 sentence on what should improve and roughly by how much, if estimable"
+  "field_to_change": "frequency_cap | delivery_rate | priority",
+  "current_value": <exact current value for that field, matching GAM's shape: frequency_cap is {"maxImpressions": number, "timeAmount": number, "timeUnit": "DAY"}, delivery_rate is a string like "EVENLY" or "AS_FAST_AS_POSSIBLE", priority is a number>,
+  "new_value": <the recommended new value, same shape as current_value>,
+  "fix_bullets": ["short bullet with the specific action", "short bullet stating old value \u2192 new value"],
+  "expected_impact": "1 short sentence on what should improve"
 }`;
 
-interface LineItemInput {
+interface RequestInput {
   li_id: string;
   li_name: string;
   campaign_name: string;
@@ -57,12 +47,103 @@ interface LineItemInput {
   flight_end: string;
   pacing_percent: number;
   status: "under" | "over" | "healthy" | "mixed";
-  gam_settings: {
-    priority: number;
-    available_inventory: number;
-    creative_status: string;
-    delivery_setting: string;
-    frequency_cap: string;
+}
+
+function base64url(input: ArrayBuffer | string): string {
+  let bytes: Uint8Array;
+  if (typeof input === "string") {
+    bytes = new TextEncoder().encode(input);
+  } else {
+    bytes = new Uint8Array(input);
+  }
+  let str = "";
+  for (const byte of bytes) str += String.fromCharCode(byte);
+  return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function importPrivateKey(pem: string): Promise<CryptoKey> {
+  const pemBody = pem
+    .replace("-----BEGIN PRIVATE KEY-----", "")
+    .replace("-----END PRIVATE KEY-----", "")
+    .replace(/\s/g, "");
+  const binaryDer = atob(pemBody);
+  const bytes = new Uint8Array(binaryDer.length);
+  for (let i = 0; i < binaryDer.length; i++) bytes[i] = binaryDer.charCodeAt(i);
+  return await crypto.subtle.importKey(
+    "pkcs8",
+    bytes,
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+}
+
+async function getGamAccessToken(serviceAccountKey: {
+  client_email: string;
+  private_key: string;
+  token_uri: string;
+}): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const claims = {
+    iss: serviceAccountKey.client_email,
+    scope: "https://www.googleapis.com/auth/admanager.readonly",
+    aud: serviceAccountKey.token_uri,
+    exp: now + 3600,
+    iat: now,
+  };
+  const encodedHeader = base64url(JSON.stringify(header));
+  const encodedClaims = base64url(JSON.stringify(claims));
+  const signingInput = `${encodedHeader}.${encodedClaims}`;
+  const privateKey = await importPrivateKey(serviceAccountKey.private_key);
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    privateKey,
+    new TextEncoder().encode(signingInput)
+  );
+  const jwt = `${signingInput}.${base64url(signature)}`;
+
+  const tokenResponse = await fetch(serviceAccountKey.token_uri, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    }),
+  });
+  const tokenData = await tokenResponse.json();
+  if (!tokenResponse.ok) {
+    throw new Error(`GAM token exchange failed: ${JSON.stringify(tokenData)}`);
+  }
+  return tokenData.access_token;
+}
+
+async function fetchGamLineItemSettings(lineItemId: string) {
+  const keyJson = Deno.env.get("GAM_SERVICE_ACCOUNT_KEY");
+  const networkCode = Deno.env.get("GAM_NETWORK_CODE");
+  if (!keyJson || !networkCode) {
+    throw new Error("Missing GAM_SERVICE_ACCOUNT_KEY or GAM_NETWORK_CODE secret");
+  }
+  const serviceAccountKey = JSON.parse(keyJson);
+  const accessToken = await getGamAccessToken(serviceAccountKey);
+
+  const response = await fetch(
+    `https://admanager.googleapis.com/v1/networks/${networkCode}/lineItems/${lineItemId}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(`GAM line item fetch failed: ${JSON.stringify(data)}`);
+  }
+
+  const fcap = data.frequencyCaps?.[0];
+  return {
+    priority: data.priority ?? "unknown",
+    delivery_setting: data.deliveryRateType ?? "unknown",
+    frequency_cap: fcap
+      ? `${fcap.maxImpressions} impressions / ${fcap.timeAmount} ${fcap.timeUnit.toLowerCase()}`
+      : "no frequency cap set",
+    line_item_type: data.lineItemType ?? "unknown",
   };
 }
 
@@ -79,16 +160,26 @@ Deno.serve(async (req) => {
       });
     }
 
-    const input: LineItemInput = await req.json();
+    const input: RequestInput = await req.json();
 
-    if (!input.li_id || !input.gam_settings) {
+    if (!input.li_id) {
+      return new Response(JSON.stringify({ error: "Missing required field: li_id" }), {
+        status: 400,
+        headers: corsHeaders,
+      });
+    }
+
+    let gamSettings;
+    try {
+      gamSettings = await fetchGamLineItemSettings(input.li_id);
+    } catch (e) {
+      console.error("GAM fetch error:", e);
       return new Response(
-        JSON.stringify({ error: "Missing required fields: li_id and gam_settings" }),
-        { status: 400, headers: corsHeaders }
+        JSON.stringify({ error: "Failed to fetch live GAM settings", detail: String(e) }),
+        { status: 502, headers: corsHeaders }
       );
     }
 
-    // Build the user-turn content: the real line item snapshot
     const userContent = `Line item: ${input.li_name} (${input.li_id})
 Campaign: ${input.campaign_name}
 Goal (contracted impressions): ${input.goal}
@@ -96,12 +187,11 @@ Delivered impressions: ${input.impressions_delivered}
 Flight: ${input.flight_start} to ${input.flight_end}
 Pacing: ${input.pacing_percent}% (${input.status})
 
-GAM settings:
-- Priority: ${input.gam_settings.priority}
-- Available inventory: ${input.gam_settings.available_inventory}
-- Creative status: ${input.gam_settings.creative_status}
-- Delivery setting: ${input.gam_settings.delivery_setting}
-- Frequency cap: ${input.gam_settings.frequency_cap}
+Real GAM settings (fetched live):
+- Line item type: ${gamSettings.line_item_type}
+- Priority: ${gamSettings.priority}
+- Delivery rate setting: ${gamSettings.delivery_setting}
+- Frequency cap: ${gamSettings.frequency_cap}
 
 Diagnose the root cause and recommend one specific fix.`;
 
@@ -112,7 +202,7 @@ Diagnose the root cause and recommend one specific fix.`;
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.2, // low temp: we want consistent, grounded diagnosis, not creative variation
+          temperature: 0.2,
           responseMimeType: "application/json",
         },
       }),
@@ -147,9 +237,7 @@ Diagnose the root cause and recommend one specific fix.`;
       );
     }
 
-    // NOTE: we intentionally do NOT insert into actions_taken here.
-    // Logging only happens when a human approves the suggestion (handled in the frontend's approveAction),
-    // so unapproved/cancelled suggestions never pollute the permanent audit trail.
+    suggestion._gam_settings_used = gamSettings;
 
     return new Response(JSON.stringify(suggestion), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
