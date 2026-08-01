@@ -248,7 +248,7 @@ button.cm-table-row:hover { background: var(--surface-2); }
 .cm-modal-sub { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
 .cm-modal-close { background: none; border: none; color: var(--ink-3); padding: 4px; }
 .cm-modal-close:hover { color: var(--ink); }
-.cm-modal-body { padding: 16px 22px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.cm-modal-body { padding: 16px 22px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
 .cm-suggestion {
   display: flex; gap: 12px; text-align: left; padding: 14px; border: 1.5px solid var(--border);
   border-radius: 10px; background: var(--surface-2); width: 100%;
