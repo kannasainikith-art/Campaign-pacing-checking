@@ -236,7 +236,7 @@ button.cm-table-row:hover { background: var(--surface-2); }
 
 .cm-modal-overlay {
   position: fixed; inset: 0; background: rgba(15,20,26,0.4); backdrop-filter: blur(2px);
-  display: flex; align-items: center; justify-content: center; z-index: 100; padding: 24px;
+  display: flex; align-items: flex-start; justify-content: center; z-index: 100; padding: 24px;
   overflow-y: auto;
 }
 .cm-modal {
