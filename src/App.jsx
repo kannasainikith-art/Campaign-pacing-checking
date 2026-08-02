@@ -597,7 +597,7 @@ function CampaignsList({ campaigns, goToCampaign }) {
   );
 }
 
-function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, approvedMap }) {
+function CampaignDetail({ campaign, goBack, openAction, openGamSettings, highlightLineItemId, approvedMap }) {
   const rowRefs = useRef({});
 
   useEffect(() => {
@@ -686,8 +686,12 @@ function CampaignDetail({ campaign, goBack, openAction, highlightLineItemId, app
                 ) : (
                   <div className="cm-action-cell">
                     <button className="cm-take-action-btn" onClick={() => openAction(campaign, li)}>
-                      <Sparkles size={14} /> Take Action
+                     <Sparkles size={14} /> Take Action
                     </button>
+                    <button className="cm-btn-ghost" style={{ fontSize: 12, padding: "5px 10px" }} onClick={() => openGamSettings(campaign, li)}>
+                     GAM Settings
+                    </button>
+
                     {approved && (
                       <span className="cm-approved-tag">
                         <CheckCircle2 size={12} /> Action approved
@@ -965,6 +969,189 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
   );
 }
 
+function GamSettingsPanel({ campaign, lineItem, onClose, onTakeAction }) {
+  const [settings, setSettings] = useState(null);
+  const [isOverridden, setIsOverridden] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastFetched, setLastFetched] = useState(null);
+
+  async function fetchSettings() {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: fnError } = await supabase.functions.invoke("get-gam-settings", {
+        body: {
+          li_id: lineItem.gamLineItemId || lineItem.id,
+          li_name: lineItem.name,
+          campaign_name: campaign.name,
+        },
+      });
+      if (fnError) throw fnError;
+      if (data.error) throw new Error(data.error);
+      setSettings(data.settings);
+      setIsOverridden(data.is_simulated_override);
+      setLastFetched(new Date());
+    } catch (e) {
+      console.error("Failed to fetch GAM settings:", e);
+      setError(
+        !lineItem.gamLineItemId
+          ? "This line item isn't connected to a real GAM Line Item ID."
+          : "Couldn't fetch live GAM settings right now."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchSettings();
+  }, [campaign, lineItem]);
+
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, []);
+
+  const rows = settings
+    ? [
+        { label: "Line item type", value: String(settings.line_item_type), access: "read" },
+        { label: "Priority", value: String(settings.priority), access: "readwrite" },
+        { label: "Delivery rate setting", value: String(settings.delivery_rate_type), access: "readwrite" },
+        {
+          label: "Frequency cap",
+          value: settings.frequency_cap
+            ? `${settings.frequency_cap.maxImpressions} / ${settings.frequency_cap.timeAmount} ${String(settings.frequency_cap.timeUnit).toLowerCase()}`
+            : "not set",
+          access: "readwrite",
+        },
+        { label: "Status", value: String(settings.status), access: "readwrite" },
+      ]
+    : [];
+
+  return (
+    <div className="cm-modal-overlay" onClick={onClose}>
+      <div className="cm-modal" style={{ maxWidth: 620 }} onClick={(e) => e.stopPropagation()}>
+        <div className="cm-modal-header">
+          <div>
+            <div className="cm-modal-eyebrow">
+              <Sparkles size={13} /> Live GAM Settings
+            </div>
+            <div className="cm-modal-title">
+              {lineItem.id} · {lineItem.name}
+            </div>
+            <div className="cm-modal-sub">
+              {campaign.name}
+              {lineItem.gamLineItemId && (
+                <span className="cm-mono" style={{ marginLeft: 6, color: "var(--ink-3)" }}>
+                  GAM ID: {lineItem.gamLineItemId}
+                </span>
+              )}
+            </div>
+          </div>
+          <button className="cm-modal-close" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="cm-modal-body">
+          {loading && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "24px 0" }}>
+              <RefreshCw size={20} className="cm-spin" color="var(--accent)" />
+              <span style={{ fontSize: 13, color: "var(--ink-2)" }}>Fetching live settings from GAM…</span>
+            </div>
+          )}
+
+          {!loading && error && (
+            <div style={{ padding: "16px 0", color: "var(--under)", fontSize: 13.5 }}>{error}</div>
+          )}
+
+          {!loading && !error && settings && (
+            <>
+              {isOverridden && (
+                <div
+                  style={{
+                    background: "var(--accent-soft)",
+                    color: "var(--accent)",
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    marginBottom: 12,
+                  }}
+                >
+                  Note: one or more values below reflect an approved simulated change, not the original GAM setting.
+                </div>
+              )}
+
+              <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1.4fr 1.4fr 1.2fr",
+                    background: "var(--surface-2)",
+                    padding: "9px 14px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: "var(--ink-3)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  <span>Setting</span>
+                  <span>Current Value</span>
+                  <span>API Access</span>
+                </div>
+                {rows.map((r, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1.4fr 1.4fr 1.2fr",
+                      padding: "10px 14px",
+                      borderTop: "1px solid var(--border)",
+                      fontSize: 13,
+                      alignItems: "center",
+                    }}
+                  >
+                    <span style={{ fontWeight: 600 }}>{r.label}</span>
+                    <span className="cm-mono">{r.value}</span>
+                    <span>
+                      {r.access === "read" ? (
+                        <span style={{ color: "var(--ink-3)", fontSize: 12 }}>Read only</span>
+                      ) : (
+                        <span style={{ color: "var(--over)", fontSize: 12, fontWeight: 600 }}>
+                          Read ✓ · Write pending
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop: 10, fontSize: 11.5, color: "var(--ink-3)" }}>
+                {lastFetched && `Last synced ${lastFetched.toLocaleTimeString()} · `}
+                Write access requires GAM's SOAP API (the current REST Beta API supports read only).
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="cm-modal-footer">
+          <button className="cm-btn-ghost" onClick={fetchSettings}>
+            <RefreshCw size={14} /> Refresh
+          </button>
+          <button className="cm-btn-primary" onClick={() => onTakeAction(campaign, lineItem)}>
+            <Sparkles size={15} /> Take Action
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FullScreenState({ icon, title, sub, action }) {
   return (
     <div className="cm-fullscreen-state">
@@ -1019,6 +1206,7 @@ export default function App() {
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
   const [highlightLineItemId, setHighlightLineItemId] = useState(null);
   const [modalCtx, setModalCtx] = useState(null);
+  const [gamSettingsCtx, setGamSettingsCtx] = useState(null);
   const [actions, setActions] = useState([]);
   const [approvedMap, setApprovedMap] = useState({});
   const [toast, setToast] = useState(null);
@@ -1097,9 +1285,12 @@ const raw = rowsToRawCampaigns(rows);
     setHighlightLineItemId(lineItemId);
     setViewRaw("campaignDetail");
   }
-
   function openAction(campaign, lineItem) {
     setModalCtx({ campaign, lineItem });
+  }
+
+  function openGamSettings(campaign, lineItem) {
+    setGamSettingsCtx({ campaign, lineItem });
   }
 
   async function approveAction(suggestion) {
@@ -1158,20 +1349,6 @@ const raw = rowsToRawCampaigns(rows);
       if (writeErr) console.error("Failed to persist action to Supabase:", writeErr);
       if (!writeErr) fetchActions();
 
-      // Persist the approved change as a simulated GAM override, so it
-      // shows up as the new "current" state next time this line item is checked.
-      if (lineItem.gamLineItemId && suggestion.field_to_change) {
-        const overridePatch = { gam_line_item_id: lineItem.gamLineItemId, updated_at: new Date().toISOString() };
-        if (suggestion.field_to_change === "priority") overridePatch.priority = suggestion.new_value;
-        if (suggestion.field_to_change === "delivery_rate") overridePatch.delivery_rate_type = suggestion.new_value;
-        if (suggestion.field_to_change === "frequency_cap") overridePatch.frequency_cap = suggestion.new_value;
-        if (suggestion.field_to_change === "pause") overridePatch.status = suggestion.new_value;
-
-        const { error: overrideErr } = await supabase
-          .from("simulated_gam_overrides")
-          .upsert(overridePatch, { onConflict: "gam_line_item_id" });
-        if (overrideErr) console.error("Failed to save simulated GAM override:", overrideErr);
-      }
     } catch (e) {
       console.error("Failed to persist action to Supabase:", e);
     }
@@ -1251,6 +1428,7 @@ const raw = rowsToRawCampaigns(rows);
             campaign={selectedCampaign}
             goBack={() => setView("campaigns")}
             openAction={openAction}
+            openGamSettings={openGamSettings}
             highlightLineItemId={highlightLineItemId}
             approvedMap={approvedMap}
           />
@@ -1273,6 +1451,18 @@ const raw = rowsToRawCampaigns(rows);
           lineItem={modalCtx.lineItem}
           onClose={() => setModalCtx(null)}
           onApprove={approveAction}
+        />
+      )}
+
+      {gamSettingsCtx && (
+        <GamSettingsPanel
+          campaign={gamSettingsCtx.campaign}
+          lineItem={gamSettingsCtx.lineItem}
+          onClose={() => setGamSettingsCtx(null)}
+          onTakeAction={(campaign, lineItem) => {
+            setGamSettingsCtx(null);
+            openAction(campaign, lineItem);
+          }}
         />
       )}
 
@@ -1506,7 +1696,8 @@ button.cm-table-row:hover { background: var(--surface-2); }
 
 .cm-modal-overlay {
   position: fixed; inset: 0; background: rgba(15,20,26,0.4); backdrop-filter: blur(2px);
-  display: flex; align-items: center; justify-content: center; z-index: 100; padding: 24px;
+  display: flex; align-items: flex-start; justify-content: center; z-index: 100; padding: 24px;
+  overflow-y: auto;
 }
 .cm-modal {
   background: var(--surface); border-radius: 14px; width: 100%; max-width: 560px;
@@ -1518,7 +1709,7 @@ button.cm-table-row:hover { background: var(--surface-2); }
 .cm-modal-sub { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
 .cm-modal-close { background: none; border: none; color: var(--ink-3); padding: 4px; }
 .cm-modal-close:hover { color: var(--ink); }
-.cm-modal-body { padding: 16px 22px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.cm-modal-body { padding: 16px 22px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
 .cm-suggestion {
   display: flex; gap: 12px; text-align: left; padding: 14px; border: 1.5px solid var(--border);
   border-radius: 10px; background: var(--surface-2); width: 100%;
