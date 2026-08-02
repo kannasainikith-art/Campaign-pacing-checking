@@ -178,10 +178,14 @@ function getSuggestions(campaign, li) {
 function buildSimulatedGamPayload(campaign, li, suggestion) {
   return {
     action: "simulated_gam_update",
-    network: "GAM (simulated — no live account connected)",
-    lineItemId: li.id,
+    status: "SIMULATED — GAM Beta REST API does not yet support LineItem writes (read-only currently)",
+    network: `GAM network ${li.gamLineItemId ? "(live line item, read-verified)" : "(no real GAM line item connected)"}`,
+    lineItemId: li.gamLineItemId || li.id,
     lineItemName: li.name,
     campaign: campaign.name,
+    fieldChanged: suggestion.field_to_change || null,
+    beforeValue: suggestion.current_value || null,
+    afterValue: suggestion.new_value || null,
     changeRequested: suggestion.title,
     reasoning: suggestion.description,
     currentPacing: `${li.pacing}%`,
@@ -793,17 +797,32 @@ function ActionsTakenPage({ actions }) {
   );
 }
 
+function formatGamValue(field, value) {
+  if (field === "frequency_cap" && value && typeof value === "object") {
+    return `${value.maxImpressions}/${value.timeAmount} ${value.timeUnit === "DAY" ? "day" : value.timeUnit?.toLowerCase()}`;
+  }
+  return String(value);
+}
+
 function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
-  const [suggestion, setSuggestion] = useState(null);
+  const [sharedDiagnosis, setSharedDiagnosis] = useState([]);
+  const [options, setOptions] = useState([]);
+  const [selected, setSelected] = useState(0);
   const [loadingSuggestion, setLoadingSuggestion] = useState(true);
   const [fetchError, setFetchError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function fetchSuggestion() {
+    async function fetchOptions() {
       setLoadingSuggestion(true);
       setFetchError(null);
+
+      if (!lineItem.gamLineItemId) {
+        setFetchError("This line item isn't connected to a real GAM Line Item ID yet. Add the Line item ID column to this campaign's report to enable AI recommendations.");
+        setLoadingSuggestion(false);
+        return;
+      }
       try {
         const { data, error } = await supabase.functions.invoke("generate-suggestion", {
           body: {
@@ -819,20 +838,26 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
           },
         });
         if (error) throw error;
-        if (!cancelled) setSuggestion(data);
+        if (!cancelled) {
+          setSharedDiagnosis(data.shared_diagnosis || []);
+          setOptions(data.options || []);
+          setSelected(0);
+        }
       } catch (e) {
-        console.error("Failed to fetch AI suggestion:", e);
-        if (!cancelled) setFetchError("Couldn't generate a recommendation right now. Please try again.");
+        console.error("Failed to fetch AI suggestions:", e);
+        if (!cancelled) setFetchError("Couldn't generate recommendations right now. Please try again.");
       } finally {
         if (!cancelled) setLoadingSuggestion(false);
       }
     }
 
-    fetchSuggestion();
+    fetchOptions();
     return () => {
       cancelled = true;
     };
   }, [campaign, lineItem]);
+
+  const chosen = options[selected];
 
   return (
     <div className="cm-modal-overlay" onClick={onClose}>
@@ -840,7 +865,7 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
         <div className="cm-modal-header">
           <div>
             <div className="cm-modal-eyebrow">
-              <Sparkles size={13} /> AI-generated recommendation
+              <Sparkles size={13} /> AI-generated recommendations
             </div>
             <div className="cm-modal-title">
               {lineItem.id} · {lineItem.name}{lineItem.audience ? ` · ${lineItem.audience}` : ""}
@@ -867,38 +892,50 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
           )}
 
           {!loadingSuggestion && fetchError && (
-  <div style={{ padding: "16px 0", color: "var(--under)", fontSize: 13.5 }}>{fetchError}</div>
-)}
+            <div style={{ padding: "16px 0", color: "var(--under)", fontSize: 13.5 }}>{fetchError}</div>
+          )}
 
-{!loadingSuggestion && suggestion && !fetchError && (
-  <div className="cm-suggestion is-selected" style={{ cursor: "default" }}>
-    <div>
-      <div className="cm-suggestion-title">{suggestion.title}</div>
-      <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.6 }}>
-        {suggestion.diagnosis_bullets?.map((b, i) => <li key={`d-${i}`}>{b}</li>)}
-        {suggestion.fix_bullets?.map((b, i) => <li key={`f-${i}`} style={{ fontWeight: 600, color: "var(--ink)" }}>{b}</li>)}
-      </ul>
-      <div className="cm-suggestion-impact">
-        <span className="cm-dot" style={{ background: "var(--healthy)" }} />
-        Expected impact: {suggestion.expected_impact}
-      </div>
-      {suggestion.confidence && (
-        <div
-          style={{
-            marginTop: 8,
-            fontSize: 11.5,
-            color: "var(--ink-3)",
-            textTransform: "uppercase",
-            fontWeight: 600,
-            letterSpacing: "0.04em",
-          }}
-        >
-          Confidence: {suggestion.confidence}
-        </div>
-      )}
-    </div>
-  </div>
-)}
+          {!loadingSuggestion && !fetchError && sharedDiagnosis.length > 0 && (
+            <ul
+              style={{
+                margin: "0 0 14px",
+                padding: "10px 14px",
+                background: "var(--surface-2)",
+                borderRadius: 8,
+                listStylePosition: "inside",
+                fontSize: 12.5,
+                color: "var(--ink-2)",
+                lineHeight: 1.6,
+              }}
+            >
+              {sharedDiagnosis.map((b, i) => <li key={`sd-${i}`}>{b}</li>)}
+            </ul>
+          )}
+
+          {!loadingSuggestion && !fetchError && options.map((opt, i) => (
+            <button
+              key={i}
+              className={`cm-suggestion ${selected === i ? "is-selected" : ""}`}
+              onClick={() => setSelected(i)}
+            >
+              <div className="cm-suggestion-radio">
+                <span className={`cm-radio-dot ${selected === i ? "is-on" : ""}`} />
+              </div>
+              <div>
+                <div className="cm-suggestion-title">{opt.title}</div>
+                <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12.5, color: "var(--ink)", lineHeight: 1.6, fontWeight: 600 }}>
+                  {opt.fix_bullets?.map((b, bi) => <li key={`f-${bi}`}>{b}</li>)}
+                </ul>
+                <div style={{ marginTop: 8, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--accent)", fontWeight: 700 }}>
+                  {formatGamValue(opt.field_to_change, opt.current_value)} → {formatGamValue(opt.field_to_change, opt.new_value)}
+                </div>
+                <div className="cm-suggestion-impact">
+                  <span className="cm-dot" style={{ background: "var(--healthy)" }} />
+                  Expected impact: {opt.expected_impact}
+                </div>
+              </div>
+            </button>
+          ))}
         </div>
 
         <div className="cm-modal-footer">
@@ -906,22 +943,22 @@ function TakeActionModal({ campaign, lineItem, onClose, onApprove }) {
             Cancel
           </button>
           <button
-          className="cm-btn-primary"
-          disabled={!suggestion || loadingSuggestion}
-          style={!suggestion || loadingSuggestion ? { opacity: 0.5, cursor: "not-allowed" } : {}}
-          onClick={() =>
-           onApprove({
-            title: suggestion.title,
-            description: `${suggestion.diagnosis_bullets?.join(". ")}. ${suggestion.fix_bullets?.join(". ")}`,
-            impact: suggestion.expected_impact,
-            field_to_change: suggestion.field_to_change,
-            current_value: suggestion.current_value,
-            new_value: suggestion.new_value,
-           })
-          }
->
-  <CheckCircle2 size={15} /> Approve action
-</button>
+            className="cm-btn-primary"
+            disabled={!chosen || loadingSuggestion}
+            style={!chosen || loadingSuggestion ? { opacity: 0.5, cursor: "not-allowed" } : {}}
+            onClick={() =>
+              onApprove({
+                title: chosen.title,
+                description: `${sharedDiagnosis.join(". ")}. ${chosen.fix_bullets?.join(". ")}`,
+                impact: chosen.expected_impact,
+                field_to_change: chosen.field_to_change,
+                current_value: chosen.current_value,
+                new_value: chosen.new_value,
+              })
+            }
+          >
+            <CheckCircle2 size={15} /> Approve action
+          </button>
         </div>
       </div>
     </div>
@@ -1103,6 +1140,38 @@ const raw = rowsToRawCampaigns(rows);
         });
       if (writeErr) console.error("Failed to persist action to Supabase:", writeErr);
       if (!writeErr) fetchActions();
+
+      // Persist the approved change as a simulated GAM override, so it
+      // shows up as the new "current" state next time this line item is checked.
+      if (lineItem.gamLineItemId && suggestion.field_to_change) {
+        const overridePatch = { gam_line_item_id: lineItem.gamLineItemId, updated_at: new Date().toISOString() };
+        if (suggestion.field_to_change === "priority") overridePatch.priority = suggestion.new_value;
+        if (suggestion.field_to_change === "delivery_rate") overridePatch.delivery_rate_type = suggestion.new_value;
+        if (suggestion.field_to_change === "frequency_cap") overridePatch.frequency_cap = suggestion.new_value;
+        if (suggestion.field_to_change === "pause") overridePatch.status = suggestion.new_value;
+
+        const { error: overrideErr } = await supabase
+          .from("simulated_gam_overrides")
+          .upsert(overridePatch, { onConflict: "gam_line_item_id" });
+        if (overrideErr) console.error("Failed to save simulated GAM override:", overrideErr);
+      }
+      if (writeErr) console.error("Failed to persist action to Supabase:", writeErr);
+      if (!writeErr) fetchActions();
+
+      // Persist the approved change as a simulated GAM override, so it
+      // shows up as the new "current" state next time this line item is checked.
+      if (lineItem.gamLineItemId && suggestion.field_to_change) {
+        const overridePatch = { gam_line_item_id: lineItem.gamLineItemId, updated_at: new Date().toISOString() };
+        if (suggestion.field_to_change === "priority") overridePatch.priority = suggestion.new_value;
+        if (suggestion.field_to_change === "delivery_rate") overridePatch.delivery_rate_type = suggestion.new_value;
+        if (suggestion.field_to_change === "frequency_cap") overridePatch.frequency_cap = suggestion.new_value;
+        if (suggestion.field_to_change === "pause") overridePatch.status = suggestion.new_value;
+
+        const { error: overrideErr } = await supabase
+          .from("simulated_gam_overrides")
+          .upsert(overridePatch, { onConflict: "gam_line_item_id" });
+        if (overrideErr) console.error("Failed to save simulated GAM override:", overrideErr);
+      }
     } catch (e) {
       console.error("Failed to persist action to Supabase:", e);
     }

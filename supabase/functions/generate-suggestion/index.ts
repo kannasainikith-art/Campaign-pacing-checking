@@ -9,32 +9,41 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GE
 
 const SYSTEM_PROMPT = `You are an ad-ops pacing diagnostic assistant for Google Ad Manager (GAM) line items.
 
-You will receive the real current state of one line item: its goal, delivered impressions, flight dates, pacing percentage, and its real GAM settings (line item type, priority, delivery rate setting, frequency cap).
+You will receive the real current state of one line item: its goal, delivered impressions, flight dates, pacing percentage, and its real GAM settings (line item type, priority, delivery rate setting, frequency cap, current status).
 
 CRITICAL RULE ON LINE ITEM TYPE:
-- If line_item_type is STANDARD, this is a DIRECT/GUARANTEED deal with a fixed contracted goal. Priority changes are NOT a meaningful lever and must NOT be recommended — priority-based competition matters for programmatic/price-priority inventory, not guaranteed direct deals. For STANDARD line items, choose between: frequency cap or delivery rate setting (EVENLY vs AS_FAST_AS_POSSIBLE).
-- If line_item_type is PRICE_PRIORITY, NETWORK, BULK, or HOUSE, priority IS a valid lever and can be recommended when relevant.
+- If line_item_type is STANDARD, this is a DIRECT/GUARANTEED deal. Priority changes are NOT valid — only use frequency_cap, delivery_rate, or pause.
+- If line_item_type is PRICE_PRIORITY, NETWORK, BULK, or HOUSE, priority IS a valid lever.
 
-Your job: diagnose the MOST LIKELY root cause of its pacing status, then recommend EXACTLY ONE specific, writable GAM field change appropriate to the line item type. You must choose field_to_change from ONLY these three options: "frequency_cap", "delivery_rate", or "priority" (priority only for non-STANDARD types). Do not suggest creative changes, targeting changes, or anything outside these three fields.
+CRITICAL RULE ON DELIVERY RATE:
+- delivery_rate only has two states: EVENLY (throttled) and AS_FAST_AS_POSSIBLE (aggressive).
+- If the line item is OVER-pacing and delivery_rate is already EVENLY, delivery_rate is NOT usable — do not offer it.
+- If the line item is UNDER-pacing and delivery_rate is already AS_FAST_AS_POSSIBLE, same rule — do not offer it.
 
-Diagnostic reference:
-- Under-pacing + tight frequency cap -> loosen it (increase maxImpressions or extend timeAmount)
-- Under-pacing + delivery rate EVENLY on a STANDARD deal falling behind -> switch to AS_FAST_AS_POSSIBLE
-- Under-pacing (non-STANDARD only) + low priority -> raise priority (lower number = higher priority in GAM, so recommend decreasing the numeric value)
-- Over-pacing + delivery rate AS_FAST_AS_POSSIBLE -> switch to EVENLY
-- Over-pacing + no meaningful frequency cap or a loose one -> tighten it
-- Over-pacing (non-STANDARD only) + priority too high -> lower priority (increase the numeric value)
+CRITICAL RULE ON PAUSE:
+- "pause" (changing status from READY to PAUSED) is only valid for SEVERE over-pacing — pacing_percent above roughly 130%. Never offer pause for under-pacing or mild over-pacing (110-130%).
+- Pause is a valid option only if current status is not already PAUSED.
+- Frame pause as a temporary stop-gap ("pause until budget/flight review"), not a permanent fix — always prefer frequency_cap or delivery_rate first unless the over-delivery is severe enough that immediate stoppage matters more than a gradual throttle.
 
-Respond ONLY with valid JSON matching this exact shape, no markdown formatting, no extra text. diagnosis_bullets and fix_bullets must each be an array of short, punchy bullet-point strings (3-10 words each, max 2 bullets per array):
+CRITICAL RULE ON OPTION COUNT AND DISTINCTNESS:
+- Only generate options that are genuinely, meaningfully different from each other. Do NOT pad with near-identical variations just to reach 3.
+- If only ONE field is genuinely usable, return exactly 1 option. Return 2 or 3 only if that many genuinely distinct, non-redundant changes exist.
+- Multiple frequency_cap options ARE allowed if they represent meaningfully different intensities a real ad-ops person would choose between — but do not manufacture a third when two cover it.
+
+Respond ONLY with valid JSON, no markdown, no extra text. shared_diagnosis is 1-2 bullets describing the overall pacing issue ONCE (not repeated per option). Each option's fix_bullets describes ONLY that option's specific action:
 {
-  "title": "short 5-8 word summary of the issue",
-  "diagnosis_bullets": ["short bullet naming the cause", "short bullet with the specific number/setting"],
-  "confidence": "high | medium | low",
-  "field_to_change": "frequency_cap | delivery_rate | priority",
-  "current_value": "exact current value matching GAM shape: frequency_cap is an object with maxImpressions, timeAmount, timeUnit DAY; delivery_rate is a string EVENLY or AS_FAST_AS_POSSIBLE; priority is a number",
-  "new_value": "the recommended new value, same shape as current_value",
-  "fix_bullets": ["short bullet with the specific action", "short bullet stating old value to new value"],
-  "expected_impact": "1 short sentence on what should improve"
+  "shared_diagnosis": ["short bullet on the pacing status", "short bullet on the root setting causing it"],
+  "options": [
+    {
+      "title": "short 5-8 word summary of this specific option",
+      "confidence": "high | medium | low",
+      "field_to_change": "frequency_cap | delivery_rate | priority | pause",
+      "current_value": "exact current value matching GAM shape: frequency_cap is an object with maxImpressions, timeAmount, timeUnit DAY; delivery_rate is a string EVENLY or AS_FAST_AS_POSSIBLE; priority is a number; pause's current_value is the current status string like READY",
+      "new_value": "the recommended new value, same shape as current_value (pause's new_value is the string PAUSED)",
+      "fix_bullets": ["short bullet with the specific action", "short bullet stating old value to new value"],
+      "expected_impact": "1 short sentence on what should improve"
+    }
+  ]
 }`;
 
 interface RequestInput {
@@ -137,14 +146,47 @@ async function fetchGamLineItemSettings(lineItemId: string) {
   }
 
   const fcap = data.frequencyCaps?.[0];
-  return {
+  const realSettings = {
     priority: data.priority ?? "unknown",
     delivery_setting: data.deliveryRateType ?? "unknown",
     frequency_cap: fcap
       ? `${fcap.maxImpressions} impressions / ${fcap.timeAmount} ${fcap.timeUnit.toLowerCase()}`
       : "no frequency cap set",
     line_item_type: data.lineItemType ?? "unknown",
+    status: data.status ?? "unknown",
   };
+
+  // Check for any approved simulated overrides and apply them on top of the real read
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (supabaseUrl && supabaseServiceKey) {
+    try {
+      const overrideRes = await fetch(
+        `${supabaseUrl}/rest/v1/simulated_gam_overrides?gam_line_item_id=eq.${lineItemId}&select=*`,
+        {
+          headers: {
+            apikey: supabaseServiceKey,
+            Authorization: `Bearer ${supabaseServiceKey}`,
+          },
+        }
+      );
+      const overrides = await overrideRes.json();
+      const override = overrides?.[0];
+      if (override) {
+        if (override.priority != null) realSettings.priority = override.priority;
+        if (override.delivery_rate_type) realSettings.delivery_setting = override.delivery_rate_type;
+        if (override.frequency_cap) {
+          const of = override.frequency_cap;
+          realSettings.frequency_cap = `${of.maxImpressions} impressions / ${of.timeAmount} ${String(of.timeUnit).toLowerCase()}`;
+        }
+        if (override.status) realSettings.status = override.status;
+      }
+    } catch (e) {
+      console.error("Failed to check simulated overrides (non-fatal):", e);
+    }
+  }
+
+  return realSettings;
 }
 
 Deno.serve(async (req) => {
@@ -192,8 +234,9 @@ Real GAM settings (fetched live):
 - Priority: ${gamSettings.priority}
 - Delivery rate setting: ${gamSettings.delivery_setting}
 - Frequency cap: ${gamSettings.frequency_cap}
+- Current status: ${gamSettings.status}
 
-Diagnose the root cause and recommend one specific fix.`;
+Generate the appropriate number of genuinely distinct options (1-3) to address this pacing issue.`;
 
     const geminiResponse = await fetch(GEMINI_URL, {
       method: "POST",
@@ -202,7 +245,7 @@ Diagnose the root cause and recommend one specific fix.`;
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.2,
+          temperature: 0.3,
           responseMimeType: "application/json",
         },
       }),
@@ -227,9 +270,9 @@ Diagnose the root cause and recommend one specific fix.`;
       );
     }
 
-    let suggestion;
+    let result;
     try {
-      suggestion = JSON.parse(rawText);
+      result = JSON.parse(rawText);
     } catch (e) {
       return new Response(
         JSON.stringify({ error: "Failed to parse Gemini response as JSON", raw: rawText }),
@@ -237,9 +280,9 @@ Diagnose the root cause and recommend one specific fix.`;
       );
     }
 
-    suggestion._gam_settings_used = gamSettings;
+    result._gam_settings_used = gamSettings;
 
-    return new Response(JSON.stringify(suggestion), {
+    return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {

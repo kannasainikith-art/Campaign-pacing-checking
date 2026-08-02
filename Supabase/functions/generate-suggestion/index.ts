@@ -12,30 +12,27 @@ const SYSTEM_PROMPT = `You are an ad-ops pacing diagnostic assistant for Google 
 You will receive the real current state of one line item: its goal, delivered impressions, flight dates, pacing percentage, and its real GAM settings (line item type, priority, delivery rate setting, frequency cap).
 
 CRITICAL RULE ON LINE ITEM TYPE:
-- If line_item_type is STANDARD, this is a DIRECT/GUARANTEED deal with a fixed contracted goal. Priority changes are NOT a meaningful lever and must NOT be recommended — priority-based competition matters for programmatic/price-priority inventory, not guaranteed direct deals. For STANDARD line items, choose between: frequency cap or delivery rate setting (EVENLY vs AS_FAST_AS_POSSIBLE).
-- If line_item_type is PRICE_PRIORITY, NETWORK, BULK, or HOUSE, priority IS a valid lever and can be recommended when relevant.
+- If line_item_type is STANDARD, this is a DIRECT/GUARANTEED deal with a fixed contracted goal. Priority changes are NOT a meaningful lever and must NOT be recommended — priority-based competition matters for programmatic/price-priority inventory, not guaranteed direct deals. For STANDARD line items, only use: frequency cap or delivery rate setting (EVENLY vs AS_FAST_AS_POSSIBLE).
+- If line_item_type is PRICE_PRIORITY, NETWORK, BULK, or HOUSE, priority IS a valid lever.
 
-Your job: diagnose the MOST LIKELY root cause of its pacing status, then recommend EXACTLY ONE specific, writable GAM field change appropriate to the line item type. You must choose field_to_change from ONLY these three options: "frequency_cap", "delivery_rate", or "priority" (priority only for non-STANDARD types). Do not suggest creative changes, targeting changes, or anything outside these three fields.
+Your job: generate exactly 3 DISTINCT, real, writable options to address the pacing issue. Each option must use a different field_to_change where possible (choose from only: "frequency_cap", "delivery_rate", "priority" — priority only for non-STANDARD types). If fewer than 3 valid distinct fields apply (e.g. a STANDARD line item only has 2 valid levers), give 2 options with different intensities of the same field (e.g. a moderate vs aggressive frequency cap change) rather than inventing a fourth invalid field. Do not suggest creative changes, targeting changes, or anything outside frequency_cap/delivery_rate/priority.
 
-Diagnostic reference:
-- Under-pacing + tight frequency cap -> loosen it (increase maxImpressions or extend timeAmount)
-- Under-pacing + delivery rate EVENLY on a STANDARD deal falling behind -> switch to AS_FAST_AS_POSSIBLE
-- Under-pacing (non-STANDARD only) + low priority -> raise priority (lower number = higher priority in GAM, so recommend decreasing the numeric value)
-- Over-pacing + delivery rate AS_FAST_AS_POSSIBLE -> switch to EVENLY
-- Over-pacing + no meaningful frequency cap or a loose one -> tighten it
-- Over-pacing (non-STANDARD only) + priority too high -> lower priority (increase the numeric value)
-
-Respond ONLY with valid JSON matching this exact shape, no markdown formatting, no extra text. diagnosis_bullets and fix_bullets must each be an array of short, punchy bullet-point strings (3-10 words each, max 2 bullets per array):
+Respond ONLY with valid JSON matching this exact shape, no markdown formatting, no extra text. Each option's diagnosis_bullets and fix_bullets must be arrays of short, punchy bullet-point strings (3-10 words each, max 2 bullets per array):
 {
-  "title": "short 5-8 word summary of the issue",
-  "diagnosis_bullets": ["short bullet naming the cause", "short bullet with the specific number/setting"],
-  "confidence": "high | medium | low",
-  "field_to_change": "frequency_cap | delivery_rate | priority",
-  "current_value": <exact current value for that field, matching GAM's shape: frequency_cap is {"maxImpressions": number, "timeAmount": number, "timeUnit": "DAY"}, delivery_rate is a string like "EVENLY" or "AS_FAST_AS_POSSIBLE", priority is a number>,
-  "new_value": <the recommended new value, same shape as current_value>,
-  "fix_bullets": ["short bullet with the specific action", "short bullet stating old value \u2192 new value"],
-  "expected_impact": "1 short sentence on what should improve"
-}`;
+  "options": [
+    {
+      "title": "short 5-8 word summary of this option",
+      "diagnosis_bullets": ["short bullet naming the cause", "short bullet with the specific number/setting"],
+      "confidence": "high | medium | low",
+      "field_to_change": "frequency_cap | delivery_rate | priority",
+      "current_value": "exact current value matching GAM shape: frequency_cap is an object with maxImpressions, timeAmount, timeUnit DAY; delivery_rate is a string EVENLY or AS_FAST_AS_POSSIBLE; priority is a number",
+      "new_value": "the recommended new value, same shape as current_value",
+      "fix_bullets": ["short bullet with the specific action", "short bullet stating old value to new value"],
+      "expected_impact": "1 short sentence on what should improve"
+    }
+  ]
+}
+The options array must contain 2 or 3 objects, ordered from most recommended to least.`;
 
 interface RequestInput {
   li_id: string;
@@ -193,7 +190,7 @@ Real GAM settings (fetched live):
 - Delivery rate setting: ${gamSettings.delivery_setting}
 - Frequency cap: ${gamSettings.frequency_cap}
 
-Diagnose the root cause and recommend one specific fix.`;
+Generate 2-3 distinct options to address this pacing issue.`;
 
     const geminiResponse = await fetch(GEMINI_URL, {
       method: "POST",
@@ -202,7 +199,7 @@ Diagnose the root cause and recommend one specific fix.`;
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.2,
+          temperature: 0.3,
           responseMimeType: "application/json",
         },
       }),
@@ -227,9 +224,9 @@ Diagnose the root cause and recommend one specific fix.`;
       );
     }
 
-    let suggestion;
+    let result;
     try {
-      suggestion = JSON.parse(rawText);
+      result = JSON.parse(rawText);
     } catch (e) {
       return new Response(
         JSON.stringify({ error: "Failed to parse Gemini response as JSON", raw: rawText }),
@@ -237,9 +234,9 @@ Diagnose the root cause and recommend one specific fix.`;
       );
     }
 
-    suggestion._gam_settings_used = gamSettings;
+    result._gam_settings_used = gamSettings;
 
-    return new Response(JSON.stringify(suggestion), {
+    return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
