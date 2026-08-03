@@ -1033,7 +1033,7 @@ function GamSettingsPanel({ campaign, lineItem, onClose, onTakeAction }) {
 
   return (
     <div className="cm-modal-overlay" onClick={onClose}>
-      <div className="cm-modal" style={{ maxWidth: 620 }} onClick={(e) => e.stopPropagation()}>
+      <div className="cm-modal" style={{ maxWidth: 620, height: "92vh"}} onClick={(e) => e.stopPropagation()}>
         <div className="cm-modal-header">
           <div>
             <div className="cm-modal-eyebrow">
@@ -1086,7 +1086,7 @@ function GamSettingsPanel({ campaign, lineItem, onClose, onTakeAction }) {
                 </div>
               )}
 
-              <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+              <div style={{ border: "1px solid var(--border)", borderRadius: 10 }} >
                 <div
                   style={{
                     display: "grid",
@@ -1123,7 +1123,7 @@ function GamSettingsPanel({ campaign, lineItem, onClose, onTakeAction }) {
                         <span style={{ color: "var(--ink-3)", fontSize: 12 }}>Read only</span>
                       ) : (
                         <span style={{ color: "var(--over)", fontSize: 12, fontWeight: 600 }}>
-                          Read ✓ · Write pending
+                          Read ✓ · Write ✓ 
                         </span>
                       )}
                     </span>
@@ -1317,41 +1317,115 @@ const raw = rowsToRawCampaigns(rows);
     setTimeout(() => setToast(null), 3200);
 
     try {
-      const { error: writeErr } = await supabase
-        .from("actions_taken")
-        .insert({
-          campaign_name: campaign.name,
-          li_id: lineItem.gamLineItemId || lineItem.id,
-          li_name: lineItem.name,
-          title: suggestion.title,
-          description: suggestion.description,
-          impact: suggestion.impact,
-          li_status: lineItem.status,
-          simulated_gam_payload: gamPayload,
-        });
-      if (writeErr) console.error("Failed to persist action to Supabase:", writeErr);
-      if (!writeErr) fetchActions();
+  const { error: writeErr } = await supabase
+    .from("actions_taken")
+    .insert({
+      campaign_name: campaign.name,
+      li_id: lineItem.gamLineItemId || lineItem.id,
+      li_name: lineItem.name,
+      title: suggestion.title,
+      description: suggestion.description,
+      impact: suggestion.impact,
+      li_status: lineItem.status,
+      simulated_gam_payload: gamPayload,
+    });
 
-      // Persist the approved change as a simulated GAM override, so it
-      // shows up as the new "current" state next time this line item is checked.
-      if (lineItem.gamLineItemId && suggestion.field_to_change) {
-        const overridePatch = { gam_line_item_id: lineItem.gamLineItemId, updated_at: new Date().toISOString() };
-        if (suggestion.field_to_change === "priority") overridePatch.priority = suggestion.new_value;
-        if (suggestion.field_to_change === "delivery_rate") overridePatch.delivery_rate_type = suggestion.new_value;
-        if (suggestion.field_to_change === "frequency_cap") overridePatch.frequency_cap = suggestion.new_value;
-        if (suggestion.field_to_change === "pause") overridePatch.status = suggestion.new_value;
+  if (writeErr) {
+    console.error("Failed to persist action to Supabase:", writeErr);
+  } else {
+    fetchActions();
+  }
 
-        const { error: overrideErr } = await supabase
-          .from("simulated_gam_overrides")
-          .upsert(overridePatch, { onConflict: "gam_line_item_id" });
-        if (overrideErr) console.error("Failed to save simulated GAM override:", overrideErr);
-      }
-      if (writeErr) console.error("Failed to persist action to Supabase:", writeErr);
-      if (!writeErr) fetchActions();
+  // Persist simulated override (keep this for audit/history)
+  if (lineItem.gamLineItemId && suggestion.field_to_change) {
+    const overridePatch = {
+      gam_line_item_id: lineItem.gamLineItemId,
+      updated_at: new Date().toISOString(),
+    };
 
-    } catch (e) {
-      console.error("Failed to persist action to Supabase:", e);
+    if (suggestion.field_to_change === "priority") {
+      overridePatch.priority = suggestion.new_value;
     }
+
+    if (suggestion.field_to_change === "delivery_rate") {
+      overridePatch.delivery_rate_type = suggestion.new_value;
+    }
+
+    if (suggestion.field_to_change === "frequency_cap") {
+      overridePatch.frequency_cap = suggestion.new_value;
+    }
+
+    if (suggestion.field_to_change === "pause") {
+      overridePatch.status = suggestion.new_value;
+    }
+
+    const { error: overrideErr } = await supabase
+      .from("simulated_gam_overrides")
+      .upsert(overridePatch, { onConflict: "gam_line_item_id" });
+
+    if (overrideErr) {
+      console.error("Failed to save simulated GAM override:", overrideErr);
+    }
+  }
+
+  // ===========================
+  // LIVE GOOGLE AD MANAGER CALL
+  // ===========================
+
+  if (lineItem.gamLineItemId) {
+
+    let endpoint = "";
+
+    switch (suggestion.field_to_change) {
+
+      case "pause":
+        endpoint =
+          suggestion.new_value === "PAUSED"
+            ? "/pause"
+            : "/resume";
+        break;
+
+      // We'll implement these endpoints next
+      case "priority":
+        endpoint = "/update-priority";
+        break;
+
+      case "frequency_cap":
+        endpoint = "/update-frequency";
+        break;
+
+      default:
+        endpoint = "";
+    }
+
+    if (endpoint) {
+      const response = await fetch(
+        `http://127.0.0.1:5000${endpoint}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            lineItemId: lineItem.gamLineItemId,
+            value: suggestion.new_value,
+          }),
+        }
+      );
+
+      const result = await response.json();
+
+      console.log("Google Ad Manager Response:", result);
+
+      if (!response.ok) {
+        throw new Error(result.message || "SOAP API request failed");
+      }
+    }
+  }
+
+} catch (e) {
+  console.error("Approve Action Failed:", e);
+}
   }
 
   const selectedCampaign = campaigns.find((c) => c.id === selectedCampaignId);
