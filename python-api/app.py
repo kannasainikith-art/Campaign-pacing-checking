@@ -10,6 +10,7 @@ CORS(app)
 
 print("Loading Google Ad Manager client...")
 
+import startup
 client = ad_manager.AdManagerClient.LoadFromStorage(
     "googleads.yaml"
 )
